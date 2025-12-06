@@ -31,6 +31,7 @@ import Header from "@/components/Header.jsx";
 import FilterChips from "@/components/FilterChips.jsx";
 import SearchBar from "@/components/SearchBar.jsx";
 import EmptyState from "@/components/EmptyState.jsx";
+import { useAuth } from "@/utils/auth/useAuth";
 
 const EVENT_TYPE_ICONS = {
   food: Utensils,
@@ -58,6 +59,7 @@ export default function HistoryScreen() {
   const insets = useSafeAreaInsets();
   const colors = useColors();
   const router = useRouter();
+  const { getAccessToken } = useAuth();
 
   const [fontsLoaded] = useFonts({
     Poppins_400Regular,
@@ -71,20 +73,26 @@ export default function HistoryScreen() {
   const userId = "user-123";
 
   const { data, isLoading, refetch, isRefetching } = useQuery({
-    queryKey: ["events", userId, selectedFilter],
+    queryKey: ["events", selectedFilter],
     queryFn: async () => {
       const eventTypeParam =
         selectedFilter === "All" ? "all" : selectedFilter.toLowerCase();
+
+      const token = await getAccessToken();
       const response = await fetch(
-        `/api/events?userId=${userId}&eventType=${eventTypeParam}`,
+        `/api/events?category=${eventTypeParam}${searchQuery ? `&search=${encodeURIComponent(searchQuery)}` : ""}`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        },
       );
 
       if (!response.ok) {
         throw new Error("Failed to fetch events");
       }
 
-      const result = await response.json();
-      return result.events || [];
+      return await response.json();
     },
   });
 
@@ -165,7 +173,7 @@ export default function HistoryScreen() {
         title="History"
         showCredits={false}
         onMenuPress={() => {}}
-        onProfilePress={() => router.push("/(tabs)/profile")}
+        onProfilePress={() => router.push("/(tabs)/(profile)")}
       />
 
       <FilterChips

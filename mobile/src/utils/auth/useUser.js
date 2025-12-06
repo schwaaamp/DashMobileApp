@@ -1,9 +1,11 @@
 import { useState, useEffect, useCallback } from "react";
 import * as SupabaseAuth from "@/utils/supabaseAuth";
+import { useAuth } from "./useAuth";
 
 export const useUser = () => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
+  const { isAuthenticated, isReady } = useAuth();
 
   const fetchUser = useCallback(async () => {
     setLoading(true);
@@ -19,8 +21,16 @@ export const useUser = () => {
   }, []);
 
   useEffect(() => {
-    fetchUser();
-  }, [fetchUser]);
+    if (isReady) {
+      if (isAuthenticated) {
+        fetchUser();
+      } else {
+        // Clear user when logged out
+        setUser(null);
+        setLoading(false);
+      }
+    }
+  }, [isAuthenticated, isReady, fetchUser]);
 
   return {
     user,

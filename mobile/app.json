@@ -1,6 +1,8 @@
 {
   "expo": {
-    "name": "Anything mobile app",
+    "name": "Dash Mobile",
+    "slug": "dash-mobile",
+    "scheme": "dashmobile",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -67,8 +69,8 @@
         "origin": false
       }
     },
-    "runtimeVersion": {
-      "policy": "appVersion"
+    "updates": {
+      "enabled": false
     }
   }
 }

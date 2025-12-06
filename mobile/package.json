@@ -83,7 +83,9 @@
     "sonner-native": "^0.21.0",
     "three": "^0.166.0",
     "yup": "^1.6.1",
-    "zustand": "5.0.3"
+    "zustand": "5.0.3",
+    "expo-auth-session": "~7.0.10",
+    "expo-crypto": "~15.0.8"
   },
   "devDependencies": {
     "@expo/cli": "^54.0.1",
@@ -101,4 +103,3 @@
   },
   "private": true
 }
-

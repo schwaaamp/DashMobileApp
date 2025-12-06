@@ -9,7 +9,7 @@ import {
   Alert,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { Mic, Camera, Send, Square } from "lucide-react-native";
+import { Mic, Camera, Send } from "lucide-react-native";
 import * as Haptics from "expo-haptics";
 import * as ImagePicker from "expo-image-picker";
 import { useRouter } from "expo-router";
@@ -22,20 +22,14 @@ import {
 import { useColors } from "@/components/useColors.jsx";
 import Header from "@/components/Header.jsx";
 import useUpload from "@/utils/useUpload.js";
-import {
-  useAudioRecorder,
-  useAudioRecorderState,
-  requestRecordingPermissionsAsync,
-  RecordingPresets,
-} from "expo-audio";
+import { useAuth } from "@/utils/auth/useAuth";
 
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const colors = useColors();
   const router = useRouter();
   const [upload] = useUpload();
-  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
-  const recorderState = useAudioRecorderState(recorder);
+  const { getAccessToken, isAuthenticated, signIn } = useAuth();
 
   const [fontsLoaded] = useFonts({
     Poppins_400Regular,
@@ -45,7 +39,6 @@ export default function HomeScreen() {
 
   const [textInput, setTextInput] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
-  const [isRecording, setIsRecording] = useState(false);
 
   const samplePrompts = [
     "Log 6 units of basal insulin",
@@ -55,99 +48,14 @@ export default function HomeScreen() {
     "20 minute sauna session at 180°F",
   ];
 
-  const handleVoicePress = useCallback(async () => {
+  const handleVoicePress = useCallback(() => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-
-    if (isRecording) {
-      // Stop recording
-      try {
-        await recorder.stop();
-        setIsRecording(false);
-        setIsProcessing(true);
-
-        // Upload and transcribe the audio
-        const audioUri = recorder.uri;
-
-        // Read the audio file as base64
-        const response = await fetch(audioUri);
-        const blob = await response.blob();
-        const reader = new FileReader();
-
-        reader.onloadend = async () => {
-          const base64Audio = reader.result.split(",")[1];
-
-          try {
-            const transcribeResponse = await fetch("/api/voice/transcribe", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ audioBase64: base64Audio }),
-            });
-
-            if (!transcribeResponse.ok) {
-              throw new Error("Failed to transcribe audio");
-            }
-
-            const { transcription } = await transcribeResponse.json();
-
-            // Now parse the transcribed text
-            const parseResponse = await fetch("/api/voice/parse", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ text: transcription }),
-            });
-
-            if (!parseResponse.ok) {
-              throw new Error("Failed to parse transcription");
-            }
-
-            const parsedData = await parseResponse.json();
-
-            router.push({
-              pathname: "/confirm",
-              params: {
-                data: JSON.stringify(parsedData),
-                captureMethod: "voice",
-              },
-            });
-          } catch (error) {
-            console.error("Voice processing error:", error);
-            Alert.alert(
-              "Error",
-              "Failed to process voice recording. Please try again.",
-            );
-          } finally {
-            setIsProcessing(false);
-          }
-        };
-
-        reader.readAsDataURL(blob);
-      } catch (error) {
-        console.error("Recording stop error:", error);
-        Alert.alert("Error", "Failed to stop recording");
-        setIsRecording(false);
-        setIsProcessing(false);
-      }
-    } else {
-      // Start recording
-      const { granted } = await requestRecordingPermissionsAsync();
-      if (!granted) {
-        Alert.alert(
-          "Permission required",
-          "Microphone permission is needed to record audio.",
-        );
-        return;
-      }
-
-      try {
-        await recorder.prepareToRecordAsync();
-        recorder.record();
-        setIsRecording(true);
-      } catch (error) {
-        console.error("Recording start error:", error);
-        Alert.alert("Error", "Failed to start recording");
-      }
-    }
-  }, [isRecording, recorder, router]);
+    Alert.alert(
+      "Voice Recording",
+      "Voice recording requires audio transcription service integration. Please use text input for now.",
+      [{ text: "OK" }],
+    );
+  }, []);
 
   const handleCameraPress = useCallback(async () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -182,9 +90,13 @@ export default function HomeScreen() {
           throw new Error("Failed to upload image");
         }
 
+        const token = await getAccessToken();
         const response = await fetch("/api/photo/analyze", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
           body: JSON.stringify({ imageUrl: url }),
         });
 
@@ -208,7 +120,7 @@ export default function HomeScreen() {
         setIsProcessing(false);
       }
     },
-    [upload, router],
+    [upload, router, getAccessToken],
   );
 
   const handleTextSubmit = useCallback(async () => {
@@ -218,9 +130,13 @@ export default function HomeScreen() {
       setIsProcessing(true);
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
+      const token = await getAccessToken();
       const response = await fetch("/api/voice/parse", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({ text: textInput }),
       });
 
@@ -245,7 +161,7 @@ export default function HomeScreen() {
     } finally {
       setIsProcessing(false);
     }
-  }, [textInput, router]);
+  }, [textInput, router, getAccessToken]);
 
   const handlePromptPress = useCallback((prompt) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -254,6 +170,60 @@ export default function HomeScreen() {
 
   if (!fontsLoaded) {
     return null;
+  }
+
+  // Show sign-in prompt if not authenticated
+  if (!isAuthenticated) {
+    return (
+      <View style={{ flex: 1, backgroundColor: colors.background }}>
+        <Header
+          title="HealthLog"
+          showCredits={false}
+          onMenuPress={() => {}}
+          onProfilePress={() => router.push("/(tabs)/profile")}
+        />
+        <View style={{ flex: 1, justifyContent: "center", alignItems: "center", paddingHorizontal: 32 }}>
+          <Text style={{
+            fontSize: 24,
+            fontFamily: "Poppins_600SemiBold",
+            color: colors.text,
+            textAlign: "center",
+            marginBottom: 16,
+          }}>
+            Welcome to HealthLog
+          </Text>
+          <Text style={{
+            fontSize: 16,
+            fontFamily: "Poppins_400Regular",
+            color: colors.textSecondary,
+            textAlign: "center",
+            marginBottom: 32,
+          }}>
+            Sign in to start tracking your health events
+          </Text>
+          <TouchableOpacity
+            style={{
+              backgroundColor: colors.primary,
+              borderRadius: 16,
+              paddingVertical: 14,
+              paddingHorizontal: 32,
+            }}
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              signIn();
+            }}
+          >
+            <Text style={{
+              fontSize: 16,
+              fontFamily: "Poppins_600SemiBold",
+              color: colors.background,
+            }}>
+              Sign In with Google
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
   }
 
   return (
@@ -289,12 +259,12 @@ export default function HomeScreen() {
               width: 120,
               height: 120,
               borderRadius: 60,
-              backgroundColor: isRecording ? "#EF4444" : colors.primary,
+              backgroundColor: colors.primary,
               alignSelf: "center",
               alignItems: "center",
               justifyContent: "center",
               marginBottom: 24,
-              shadowColor: isRecording ? "#EF4444" : colors.primary,
+              shadowColor: colors.primary,
               shadowOffset: { width: 0, height: 8 },
               shadowOpacity: 0.3,
               shadowRadius: 16,
@@ -306,26 +276,10 @@ export default function HomeScreen() {
           >
             {isProcessing ? (
               <ActivityIndicator size="large" color={colors.background} />
-            ) : isRecording ? (
-              <Square size={48} color={colors.background} />
             ) : (
               <Mic size={48} color={colors.background} />
             )}
           </TouchableOpacity>
-
-          {isRecording && (
-            <Text
-              style={{
-                fontSize: 16,
-                fontFamily: "Poppins_500Medium",
-                color: "#EF4444",
-                textAlign: "center",
-                marginBottom: 16,
-              }}
-            >
-              Recording... Tap to stop
-            </Text>
-          )}
 
           <TextInput
             style={{
