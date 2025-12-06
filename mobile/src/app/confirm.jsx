@@ -1,0 +1,3 @@
+import { useColors } from "@/components/useColors.jsx";
+
+// ... rest of code ...
