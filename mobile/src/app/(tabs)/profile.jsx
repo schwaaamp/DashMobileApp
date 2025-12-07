@@ -1,6 +1,7 @@
 import React from "react";
 import { View, Text, TouchableOpacity, ScrollView, Alert } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useRouter } from "expo-router";
 import {
   useFonts,
   Poppins_400Regular,
@@ -25,6 +26,7 @@ import GoogleAuthWebView from "@/components/GoogleAuthWebView";
 export default function ProfileScreen() {
   const insets = useSafeAreaInsets();
   const colors = useColors();
+  const router = useRouter();
   const {
     isAuthenticated,
     isReady,
@@ -73,7 +75,16 @@ export default function ProfileScreen() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     Alert.alert("Log Out", "Are you sure you want to log out?", [
       { text: "Cancel", style: "cancel" },
-      { text: "Log Out", style: "destructive", onPress: () => signOut() },
+      { text: "Log Out", style: "destructive", onPress: async () => {
+        try {
+          await signOut();
+          // Force a complete reload by reloading the app
+          router.replace("/(tabs)/home");
+        } catch (error) {
+          console.error("Logout error:", error);
+          Alert.alert("Error", "Failed to log out. Please try again.");
+        }
+      }},
     ]);
   };
 
@@ -81,10 +92,29 @@ export default function ProfileScreen() {
     return null;
   }
 
-  // Get user initials
+  // Get user initials from user metadata or email
   const getUserInitials = () => {
-    if (!user?.email) return "?";
-    return user.email.substring(0, 2).toUpperCase();
+    if (!user) return "?";
+
+    // Try to get from user metadata first
+    if (user.user_metadata?.full_name) {
+      const names = user.user_metadata.full_name.split(' ');
+      if (names.length >= 2) {
+        return (names[0][0] + names[names.length - 1][0]).toUpperCase();
+      }
+      return user.user_metadata.full_name.substring(0, 2).toUpperCase();
+    }
+
+    // Fallback to email - get first and second part before @
+    if (user.email) {
+      const emailParts = user.email.split('@')[0].split('.');
+      if (emailParts.length >= 2) {
+        return (emailParts[0][0] + emailParts[1][0]).toUpperCase();
+      }
+      return user.email.substring(0, 2).toUpperCase();
+    }
+
+    return "?";
   };
 
   return (
@@ -94,6 +124,7 @@ export default function ProfileScreen() {
         showCredits={false}
         onMenuPress={() => {}}
         onProfilePress={() => {}}
+        userInitials={getUserInitials()}
       />
 
       <ScrollView

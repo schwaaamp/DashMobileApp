@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useRef } from "react";
 import {
   View,
   Text,
@@ -23,6 +23,14 @@ import { useColors } from "@/components/useColors.jsx";
 import Header from "@/components/Header.jsx";
 import useUpload from "@/utils/useUpload.js";
 import { useAuth } from "@/utils/auth/useAuth";
+import useUser from "@/utils/auth/useUser";
+import { processTextInput } from "@/utils/voiceEventParser";
+import {
+  startRecording,
+  stopRecording,
+  transcribeAudio,
+  deleteAudioFile,
+} from "@/utils/voiceRecording";
 
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
@@ -30,6 +38,7 @@ export default function HomeScreen() {
   const router = useRouter();
   const [upload] = useUpload();
   const { getAccessToken, isAuthenticated, signIn } = useAuth();
+  const { data: user } = useUser();
 
   const [fontsLoaded] = useFonts({
     Poppins_400Regular,
@@ -39,6 +48,8 @@ export default function HomeScreen() {
 
   const [textInput, setTextInput] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const recordingRef = useRef(null);
 
   const samplePrompts = [
     "Log 6 units of basal insulin",
@@ -48,14 +59,87 @@ export default function HomeScreen() {
     "20 minute sauna session at 180°F",
   ];
 
-  const handleVoicePress = useCallback(() => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    Alert.alert(
-      "Voice Recording",
-      "Voice recording requires audio transcription service integration. Please use text input for now.",
-      [{ text: "OK" }],
-    );
-  }, []);
+  const handleVoicePress = useCallback(async () => {
+    const claudeApiKey = process.env.EXPO_PUBLIC_CLAUDE_API_KEY;
+    const openaiApiKey = process.env.EXPO_PUBLIC_OPENAI_API_KEY;
+
+    if (!claudeApiKey || claudeApiKey === 'your_api_key_here') {
+      Alert.alert(
+        "Configuration Required",
+        "Please set your Claude API key in the .env file."
+      );
+      return;
+    }
+
+    if (!openaiApiKey || openaiApiKey === 'your_openai_api_key_here') {
+      Alert.alert(
+        "Configuration Required",
+        "Please set your OpenAI API key in the .env file for audio transcription."
+      );
+      return;
+    }
+
+    try {
+      if (isRecording) {
+        // Stop recording
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+        setIsRecording(false);
+        setIsProcessing(true);
+
+        const audioUri = await stopRecording(recordingRef.current);
+        recordingRef.current = null;
+
+        // Transcribe the audio
+        const transcribedText = await transcribeAudio(audioUri, openaiApiKey);
+
+        // Clean up audio file
+        await deleteAudioFile(audioUri);
+
+        // Process the transcribed text
+        const result = await processTextInput(
+          transcribedText,
+          user.id,
+          claudeApiKey,
+          'voice'
+        );
+
+        if (!result.success) {
+          throw new Error(result.error || "Failed to process input");
+        }
+
+        if (result.complete) {
+          Alert.alert(
+            "Success",
+            `Transcribed: "${transcribedText}"\n\nLog approved and saved!`,
+            [{ text: "OK" }]
+          );
+        } else {
+          router.push({
+            pathname: "/confirm",
+            params: {
+              data: JSON.stringify(result.parsed),
+              captureMethod: "voice",
+              auditId: result.auditId,
+              missingFields: JSON.stringify(result.missingFields),
+            },
+          });
+        }
+        setIsProcessing(false);
+      } else {
+        // Start recording
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+        const recording = await startRecording();
+        recordingRef.current = recording;
+        setIsRecording(true);
+      }
+    } catch (error) {
+      console.error("Voice recording error:", error);
+      Alert.alert("Error", error.message || "Failed to record audio. Please try again.");
+      setIsRecording(false);
+      setIsProcessing(false);
+      recordingRef.current = null;
+    }
+  }, [isRecording, user, router]);
 
   const handleCameraPress = useCallback(async () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -126,47 +210,88 @@ export default function HomeScreen() {
   const handleTextSubmit = useCallback(async () => {
     if (!textInput.trim()) return;
 
+    const apiKey = process.env.EXPO_PUBLIC_CLAUDE_API_KEY;
+    if (!apiKey || apiKey === 'your_api_key_here') {
+      Alert.alert(
+        "Configuration Required",
+        "Please set your Claude API key in the .env file. Get one from console.anthropic.com"
+      );
+      return;
+    }
+
     try {
       setIsProcessing(true);
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
-      const token = await getAccessToken();
-      const response = await fetch("/api/voice/parse", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ text: textInput }),
-      });
+      const result = await processTextInput(
+        textInput,
+        user.id,
+        apiKey,
+        'manual'
+      );
 
-      if (!response.ok) {
-        throw new Error("Failed to parse text");
+      if (!result.success) {
+        throw new Error(result.error || "Failed to process input");
       }
 
-      const parsedData = await response.json();
-
-      router.push({
-        pathname: "/confirm",
-        params: {
-          data: JSON.stringify(parsedData),
-          captureMethod: "manual",
-        },
-      });
-
-      setTextInput("");
+      if (result.complete) {
+        // Event was complete and saved successfully
+        setTextInput("");
+        Alert.alert(
+          "Success",
+          "Log approved and saved!",
+          [{ text: "OK" }]
+        );
+      } else {
+        // Need user clarification for missing fields
+        router.push({
+          pathname: "/confirm",
+          params: {
+            data: JSON.stringify(result.parsed),
+            captureMethod: "manual",
+            auditId: result.auditId,
+            missingFields: JSON.stringify(result.missingFields),
+          },
+        });
+        setTextInput("");
+      }
     } catch (error) {
       console.error("Text submit error:", error);
-      Alert.alert("Error", "Failed to process input. Please try again.");
+      Alert.alert("Error", error.message || "Failed to process input. Please try again.");
     } finally {
       setIsProcessing(false);
     }
-  }, [textInput, router, getAccessToken]);
+  }, [textInput, router, user]);
 
   const handlePromptPress = useCallback((prompt) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setTextInput(prompt);
   }, []);
+
+  // Get user initials from user metadata or email
+  const getUserInitials = () => {
+    if (!user) return "?";
+
+    // Try to get from user metadata first
+    if (user.user_metadata?.full_name) {
+      const names = user.user_metadata.full_name.split(' ');
+      if (names.length >= 2) {
+        return (names[0][0] + names[names.length - 1][0]).toUpperCase();
+      }
+      return user.user_metadata.full_name.substring(0, 2).toUpperCase();
+    }
+
+    // Fallback to email - get first and second part before @
+    if (user.email) {
+      const emailParts = user.email.split('@')[0].split('.');
+      if (emailParts.length >= 2) {
+        return (emailParts[0][0] + emailParts[1][0]).toUpperCase();
+      }
+      return user.email.substring(0, 2).toUpperCase();
+    }
+
+    return "?";
+  };
 
   if (!fontsLoaded) {
     return null;
@@ -181,6 +306,7 @@ export default function HomeScreen() {
           showCredits={false}
           onMenuPress={() => {}}
           onProfilePress={() => router.push("/(tabs)/profile")}
+          userInitials="?"
         />
         <View style={{ flex: 1, justifyContent: "center", alignItems: "center", paddingHorizontal: 32 }}>
           <Text style={{
@@ -233,6 +359,7 @@ export default function HomeScreen() {
         showCredits={false}
         onMenuPress={() => {}}
         onProfilePress={() => router.push("/(tabs)/profile")}
+        userInitials={getUserInitials()}
       />
 
       <ScrollView
@@ -254,32 +381,56 @@ export default function HomeScreen() {
             marginBottom: 32,
           }}
         >
-          <TouchableOpacity
-            style={{
-              width: 120,
-              height: 120,
-              borderRadius: 60,
-              backgroundColor: colors.primary,
-              alignSelf: "center",
-              alignItems: "center",
-              justifyContent: "center",
-              marginBottom: 24,
-              shadowColor: colors.primary,
-              shadowOffset: { width: 0, height: 8 },
-              shadowOpacity: 0.3,
-              shadowRadius: 16,
-              elevation: 8,
-            }}
-            onPress={handleVoicePress}
-            disabled={isProcessing}
-            accessibilityLabel="Record voice"
-          >
-            {isProcessing ? (
-              <ActivityIndicator size="large" color={colors.background} />
-            ) : (
-              <Mic size={48} color={colors.background} />
+          <View style={{ position: "relative", alignSelf: "center", marginBottom: 24 }}>
+            <TouchableOpacity
+              style={{
+                width: 120,
+                height: 120,
+                borderRadius: 60,
+                backgroundColor: isRecording ? "#EF4444" : colors.primary,
+                alignItems: "center",
+                justifyContent: "center",
+                shadowColor: isRecording ? "#EF4444" : colors.primary,
+                shadowOffset: { width: 0, height: 8 },
+                shadowOpacity: 0.3,
+                shadowRadius: 16,
+                elevation: 8,
+                opacity: isProcessing ? 0.6 : 1,
+              }}
+              onPress={handleVoicePress}
+              disabled={isProcessing}
+              accessibilityLabel={isRecording ? "Stop recording" : "Record voice"}
+            >
+              {isProcessing ? (
+                <ActivityIndicator size="large" color={colors.background} />
+              ) : (
+                <Mic size={48} color={colors.background} />
+              )}
+            </TouchableOpacity>
+            {isRecording && (
+              <View
+                style={{
+                  position: "absolute",
+                  bottom: -8,
+                  alignSelf: "center",
+                  backgroundColor: "#EF4444",
+                  paddingHorizontal: 12,
+                  paddingVertical: 4,
+                  borderRadius: 12,
+                }}
+              >
+                <Text
+                  style={{
+                    fontSize: 11,
+                    fontFamily: "Poppins_500Medium",
+                    color: colors.background,
+                  }}
+                >
+                  Recording...
+                </Text>
+              </View>
             )}
-          </TouchableOpacity>
+          </View>
 
           <TextInput
             style={{

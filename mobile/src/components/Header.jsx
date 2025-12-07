@@ -13,6 +13,7 @@ export default function Header({
   onMenuPress,
   onProfilePress,
   rightComponent,
+  userInitials = "?",
 }) {
   const insets = useSafeAreaInsets();
   const colors = useColors();
@@ -87,7 +88,7 @@ export default function Header({
                 color: colors.background,
               }}
             >
-              JD
+              {userInitials}
             </Text>
           </View>
         </TouchableOpacity>
