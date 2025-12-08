@@ -25,12 +25,14 @@ import useUpload from "@/utils/useUpload.js";
 import { useAuth } from "@/utils/auth/useAuth";
 import useUser from "@/utils/auth/useUser";
 import { processTextInput } from "@/utils/voiceEventParser";
+import { getUserRecentEvents, createAuditRecord, updateAuditStatus, createVoiceEvent } from "@/utils/voiceEventParser";
+import { shouldSearchProducts, searchAllProducts } from "@/utils/productSearch";
 import {
   startRecording,
   stopRecording,
-  transcribeAudio,
   deleteAudioFile,
 } from "@/utils/voiceRecording";
+import { parseAudioWithGemini } from "@/utils/geminiParser";
 
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
@@ -60,21 +62,12 @@ export default function HomeScreen() {
   ];
 
   const handleVoicePress = useCallback(async () => {
-    const claudeApiKey = process.env.EXPO_PUBLIC_CLAUDE_API_KEY;
-    const openaiApiKey = process.env.EXPO_PUBLIC_OPENAI_API_KEY;
+    const geminiApiKey = process.env.EXPO_PUBLIC_GEMINI_API_KEY;
 
-    if (!claudeApiKey || claudeApiKey === 'your_api_key_here') {
+    if (!geminiApiKey || geminiApiKey === 'your_gemini_api_key_here') {
       Alert.alert(
         "Configuration Required",
-        "Please set your Claude API key in the .env file."
-      );
-      return;
-    }
-
-    if (!openaiApiKey || openaiApiKey === 'your_openai_api_key_here') {
-      Alert.alert(
-        "Configuration Required",
-        "Please set your OpenAI API key in the .env file for audio transcription."
+        "Please set your Gemini API key in the .env file."
       );
       return;
     }
@@ -89,38 +82,93 @@ export default function HomeScreen() {
         const audioUri = await stopRecording(recordingRef.current);
         recordingRef.current = null;
 
-        // Transcribe the audio
-        const transcribedText = await transcribeAudio(audioUri, openaiApiKey);
+        console.log('Fetching user history for context...');
+        const userHistory = await getUserRecentEvents(user.id, 50);
+        console.log(`Found ${userHistory.length} recent events`);
+
+        // Parse audio with Gemini (transcription + parsing in one call)
+        const parsed = await parseAudioWithGemini(audioUri, geminiApiKey, userHistory);
+
+        console.log(`Transcription: "${parsed.transcription}"`);
+        console.log(`Parsing confidence: ${parsed.confidence}%`);
 
         // Clean up audio file
         await deleteAudioFile(audioUri);
 
-        // Process the transcribed text
-        const result = await processTextInput(
-          transcribedText,
+        // Create audit record
+        const geminiModel = 'gemini-2.5-flash';
+        const auditRecord = await createAuditRecord(
           user.id,
-          claudeApiKey,
-          'voice'
+          parsed.transcription,
+          parsed.event_type,
+          parsed.event_data.value || null,
+          parsed.event_data.units || null,
+          geminiModel,
+          {
+            capture_method: 'voice',
+            user_history_count: userHistory.length,
+            gemini_model: geminiModel,
+            confidence: parsed.confidence,
+            parsed_at: new Date().toISOString()
+          }
         );
 
-        if (!result.success) {
-          throw new Error(result.error || "Failed to process input");
+        // Check if we should search for products
+        let productOptions = null;
+        const shouldSearch = shouldSearchProducts(parsed.event_type, parsed.event_data, parsed.confidence);
+        console.log(`Product search decision: ${shouldSearch} (confidence: ${parsed.confidence}%, type: ${parsed.event_type})`);
+
+        if (shouldSearch) {
+          console.log('Searching product databases...');
+          const searchQuery = parsed.event_data.description || parsed.event_data.name || parsed.transcription;
+          console.log(`Search query: "${searchQuery}"`);
+          const usdaApiKey = process.env.EXPO_PUBLIC_USDA_API_KEY;
+          productOptions = await searchAllProducts(searchQuery, usdaApiKey);
+          console.log(`Found ${productOptions.length} product options`);
+        } else {
+          console.log('Skipping product search - confidence is high enough');
         }
 
-        if (result.complete) {
+        // Determine if we should show confirmation screen
+        const needsConfirmation = !parsed.complete ||
+                                  (shouldSearch && ['food', 'supplement', 'medication'].includes(parsed.event_type));
+
+        if (parsed.complete && !needsConfirmation) {
+          // Save directly
+          console.log('Saving directly - complete and no confirmation needed');
+          await createVoiceEvent(
+            user.id,
+            parsed.event_type,
+            parsed.event_data,
+            parsed.event_time,
+            auditRecord.id,
+            'voice'
+          );
+          await updateAuditStatus(auditRecord.id, 'parsed');
+
           Alert.alert(
             "Success",
-            `Transcribed: "${transcribedText}"\n\nLog approved and saved!`,
+            `Transcribed: "${parsed.transcription}"\n\nLog approved and saved!`,
             [{ text: "OK" }]
           );
         } else {
+          // Show confirmation screen
+          console.log(`Going to confirmation screen - complete: ${parsed.complete}, products: ${productOptions?.length || 0}, needs confirmation: ${needsConfirmation}`);
+          await updateAuditStatus(auditRecord.id, 'awaiting_user_clarification');
+
+          const missingFields = parsed.complete ? [] : Object.keys(parsed.event_data).filter(
+            field => !parsed.event_data[field]
+          );
+
           router.push({
             pathname: "/confirm",
             params: {
-              data: JSON.stringify(result.parsed),
+              data: JSON.stringify(parsed),
               captureMethod: "voice",
-              auditId: result.auditId,
-              missingFields: JSON.stringify(result.missingFields),
+              auditId: auditRecord.id,
+              missingFields: JSON.stringify(missingFields),
+              productOptions: productOptions ? JSON.stringify(productOptions) : null,
+              confidence: parsed.confidence?.toString() || null,
             },
           });
         }
@@ -243,7 +291,7 @@ export default function HomeScreen() {
           [{ text: "OK" }]
         );
       } else {
-        // Need user clarification for missing fields
+        // Need user clarification for missing fields or product selection
         router.push({
           pathname: "/confirm",
           params: {
@@ -251,6 +299,8 @@ export default function HomeScreen() {
             captureMethod: "manual",
             auditId: result.auditId,
             missingFields: JSON.stringify(result.missingFields),
+            productOptions: result.productOptions ? JSON.stringify(result.productOptions) : null,
+            confidence: result.confidence?.toString() || null,
           },
         });
         setTextInput("");

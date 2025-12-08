@@ -116,7 +116,15 @@ export async function transcribeAudio(audioUri, apiKey) {
             if (!result.text) {
               reject(new Error('No transcription text returned'));
             } else {
-              resolve(result.text);
+              // Return both text and metadata
+              resolve({
+                text: result.text,
+                metadata: {
+                  model: 'whisper-1',
+                  duration: result.usage?.seconds || null,
+                  usage_type: result.usage?.type || null
+                }
+              });
             }
           } catch (e) {
             console.error('Error parsing response:', e);
