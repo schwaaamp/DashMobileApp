@@ -32,6 +32,8 @@ import FilterChips from "@/components/FilterChips.jsx";
 import SearchBar from "@/components/SearchBar.jsx";
 import EmptyState from "@/components/EmptyState.jsx";
 import { useAuth } from "@/utils/auth/useAuth";
+import useUser from "@/utils/auth/useUser";
+import { supabase } from "@/utils/supabaseClient";
 
 const EVENT_TYPE_ICONS = {
   food: Utensils,
@@ -59,7 +61,7 @@ export default function HistoryScreen() {
   const insets = useSafeAreaInsets();
   const colors = useColors();
   const router = useRouter();
-  const { getAccessToken } = useAuth();
+  const { data: user } = useUser();
 
   const [fontsLoaded] = useFonts({
     Poppins_400Regular,
@@ -70,30 +72,33 @@ export default function HistoryScreen() {
   const [selectedFilter, setSelectedFilter] = useState("All");
   const [searchQuery, setSearchQuery] = useState("");
 
-  const userId = "user-123";
-
   const { data, isLoading, refetch, isRefetching } = useQuery({
-    queryKey: ["events", selectedFilter],
+    queryKey: ["events", selectedFilter, user?.id],
     queryFn: async () => {
-      const eventTypeParam =
-        selectedFilter === "All" ? "all" : selectedFilter.toLowerCase();
+      if (!user?.id) return [];
 
-      const token = await getAccessToken();
-      const response = await fetch(
-        `/api/events?category=${eventTypeParam}${searchQuery ? `&search=${encodeURIComponent(searchQuery)}` : ""}`,
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        },
-      );
+      let query = supabase
+        .from('voice_events')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('event_time', { ascending: false })
+        .limit(100);
 
-      if (!response.ok) {
-        throw new Error("Failed to fetch events");
+      // Filter by event type if not "All"
+      if (selectedFilter !== "All") {
+        query = query.eq('event_type', selectedFilter.toLowerCase());
       }
 
-      return await response.json();
+      const { data, error } = await query;
+
+      if (error) {
+        console.error('Error fetching events:', error);
+        throw new Error('Failed to fetch events');
+      }
+
+      return data || [];
     },
+    enabled: !!user?.id,
   });
 
   const filters = [
@@ -132,28 +137,53 @@ export default function HistoryScreen() {
 
   const getEventSummary = (event) => {
     const data = event.event_data;
+    if (!data) return "Event logged";
+
     switch (event.event_type) {
       case "food":
-        return (
-          data.food_items?.map((item) => item.name).join(", ") || "Food logged"
-        );
+        return data.description || "Food logged";
       case "glucose":
-        return `${data.value} ${data.unit}`;
+        return `${data.value} ${data.units || 'mg/dL'}`;
       case "insulin":
-        return `${data.dose} units ${data.type}`;
+        return `${data.value} ${data.units || 'units'} ${data.insulin_type || ''}`;
       case "activity":
-        return `${data.activity_type} - ${data.duration_minutes}min`;
+        return `${data.activity_type} - ${data.duration}min`;
       case "supplement":
-        return `${data.name} ${data.dosage}${data.unit}`;
+        return `${data.name} ${data.dosage}${data.units || ''}`;
       case "sauna":
-        return `${data.duration_minutes} minutes`;
+        return `${data.duration}min at ${data.temperature}°${data.temperature_units || 'F'}`;
       case "medication":
-        return `${data.name} ${data.dosage}${data.unit}`;
+        return `${data.name} ${data.dosage}${data.units || ''}`;
       case "symptom":
-        return data.symptom;
+        return data.description || "Symptom logged";
       default:
         return "Event logged";
     }
+  };
+
+  // Get user initials from user metadata or email
+  const getUserInitials = () => {
+    if (!user) return "?";
+
+    // Try to get from user metadata first
+    if (user.user_metadata?.full_name) {
+      const names = user.user_metadata.full_name.split(' ');
+      if (names.length >= 2) {
+        return (names[0][0] + names[names.length - 1][0]).toUpperCase();
+      }
+      return user.user_metadata.full_name.substring(0, 2).toUpperCase();
+    }
+
+    // Fallback to email - get first and second part before @
+    if (user.email) {
+      const emailParts = user.email.split('@')[0].split('.');
+      if (emailParts.length >= 2) {
+        return (emailParts[0][0] + emailParts[1][0]).toUpperCase();
+      }
+      return user.email.substring(0, 2).toUpperCase();
+    }
+
+    return "?";
   };
 
   if (!fontsLoaded) {
@@ -172,20 +202,15 @@ export default function HistoryScreen() {
       <Header
         title="History"
         showCredits={false}
+        userInitials={getUserInitials()}
         onMenuPress={() => {}}
-        onProfilePress={() => router.push("/(tabs)/(profile)")}
+        onProfilePress={() => router.push("/(tabs)/profile")}
       />
 
       <FilterChips
         filters={filters}
         selectedFilter={selectedFilter}
         onFilterPress={setSelectedFilter}
-      />
-
-      <SearchBar
-        placeholder="Search events..."
-        value={searchQuery}
-        onChangeText={setSearchQuery}
       />
 
       {isLoading ? (
@@ -206,7 +231,7 @@ export default function HistoryScreen() {
           contentContainerStyle={{
             paddingHorizontal: 20,
             paddingTop: 8,
-            paddingBottom: insets.bottom + 24,
+            paddingBottom: insets.bottom + 80,
           }}
           showsVerticalScrollIndicator={false}
           refreshControl={
@@ -222,7 +247,7 @@ export default function HistoryScreen() {
               const Icon = EVENT_TYPE_ICONS[event.event_type] || FileText;
               return (
                 <TouchableOpacity
-                  key={event.event_id}
+                  key={event.id}
                   style={{
                     backgroundColor: colors.cardBackground,
                     borderRadius: 16,
@@ -232,7 +257,7 @@ export default function HistoryScreen() {
                     flexDirection: "row",
                     alignItems: "center",
                   }}
-                  onPress={() => handleEventPress(event.event_id)}
+                  onPress={() => handleEventPress(event.id)}
                   accessibilityLabel={`View ${event.event_type} event`}
                 >
                   <View
@@ -287,6 +312,27 @@ export default function HistoryScreen() {
           </View>
         </ScrollView>
       )}
+
+      {/* Search bar at bottom */}
+      <View
+        style={{
+          position: 'absolute',
+          bottom: insets.bottom,
+          left: 0,
+          right: 0,
+          backgroundColor: colors.background,
+          borderTopWidth: 1,
+          borderTopColor: colors.outline,
+          paddingHorizontal: 20,
+          paddingVertical: 12,
+        }}
+      >
+        <SearchBar
+          placeholder="Filter for..."
+          value={searchQuery}
+          onChangeText={setSearchQuery}
+        />
+      </View>
     </View>
   );
 }

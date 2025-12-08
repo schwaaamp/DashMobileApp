@@ -24,7 +24,6 @@ import Header from "@/components/Header.jsx";
 import useUpload from "@/utils/useUpload.js";
 import { useAuth } from "@/utils/auth/useAuth";
 import useUser from "@/utils/auth/useUser";
-import { processTextInput } from "@/utils/voiceEventParser";
 import { getUserRecentEvents, createAuditRecord, updateAuditStatus, createVoiceEvent } from "@/utils/voiceEventParser";
 import { shouldSearchProducts, searchAllProducts } from "@/utils/productSearch";
 import {
@@ -32,7 +31,7 @@ import {
   stopRecording,
   deleteAudioFile,
 } from "@/utils/voiceRecording";
-import { parseAudioWithGemini } from "@/utils/geminiParser";
+import { parseAudioWithGemini, parseTextWithGemini } from "@/utils/geminiParser";
 
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
@@ -60,6 +59,58 @@ export default function HomeScreen() {
     "Took 500mg vitamin C supplement",
     "20 minute sauna session at 180°F",
   ];
+
+  // Helper function to extract value and units from event data based on event type
+  const extractValueAndUnits = (eventType, eventData) => {
+    if (!eventData) return { value: null, units: null };
+
+    switch (eventType) {
+      case 'sauna':
+        // Store duration as value, minutes as units
+        return {
+          value: eventData.duration || null,
+          units: eventData.duration ? 'minutes' : null
+        };
+      case 'activity':
+        // Store duration as value, minutes as units
+        return {
+          value: eventData.duration || null,
+          units: eventData.duration ? 'minutes' : null
+        };
+      case 'glucose':
+        // Already has value and units
+        return {
+          value: eventData.value || null,
+          units: eventData.units || null
+        };
+      case 'insulin':
+        // Already has value and units
+        return {
+          value: eventData.value || null,
+          units: eventData.units || null
+        };
+      case 'supplement':
+        // Store dosage as value
+        return {
+          value: eventData.dosage || null,
+          units: eventData.units || null
+        };
+      case 'medication':
+        // Store dosage as value
+        return {
+          value: eventData.dosage || null,
+          units: eventData.units || null
+        };
+      case 'food':
+        // Store calories as value if available
+        return {
+          value: eventData.calories || null,
+          units: eventData.calories ? 'kcal' : null
+        };
+      default:
+        return { value: null, units: null };
+    }
+  };
 
   const handleVoicePress = useCallback(async () => {
     const geminiApiKey = process.env.EXPO_PUBLIC_GEMINI_API_KEY;
@@ -95,14 +146,17 @@ export default function HomeScreen() {
         // Clean up audio file
         await deleteAudioFile(audioUri);
 
+        // Extract value and units based on event type
+        const { value, units } = extractValueAndUnits(parsed.event_type, parsed.event_data);
+
         // Create audit record
         const geminiModel = 'gemini-2.5-flash';
         const auditRecord = await createAuditRecord(
           user.id,
           parsed.transcription,
           parsed.event_type,
-          parsed.event_data.value || null,
-          parsed.event_data.units || null,
+          value,
+          units,
           geminiModel,
           {
             capture_method: 'voice',
@@ -258,11 +312,11 @@ export default function HomeScreen() {
   const handleTextSubmit = useCallback(async () => {
     if (!textInput.trim()) return;
 
-    const apiKey = process.env.EXPO_PUBLIC_CLAUDE_API_KEY;
-    if (!apiKey || apiKey === 'your_api_key_here') {
+    const geminiApiKey = process.env.EXPO_PUBLIC_GEMINI_API_KEY;
+    if (!geminiApiKey || geminiApiKey === 'your_gemini_api_key_here') {
       Alert.alert(
         "Configuration Required",
-        "Please set your Claude API key in the .env file. Get one from console.anthropic.com"
+        "Please set your Gemini API key in the .env file."
       );
       return;
     }
@@ -271,19 +325,70 @@ export default function HomeScreen() {
       setIsProcessing(true);
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
-      const result = await processTextInput(
-        textInput,
+      console.log('Fetching user history for context...');
+      const userHistory = await getUserRecentEvents(user.id, 50);
+      console.log(`Found ${userHistory.length} recent events`);
+
+      // Parse text with Gemini
+      const parsed = await parseTextWithGemini(textInput, geminiApiKey, userHistory);
+
+      console.log(`Text input: "${textInput}"`);
+      console.log(`Parsing confidence: ${parsed.confidence}%`);
+
+      // Extract value and units based on event type
+      const { value, units } = extractValueAndUnits(parsed.event_type, parsed.event_data);
+
+      // Create audit record
+      const geminiModel = 'gemini-2.5-flash';
+      const auditRecord = await createAuditRecord(
         user.id,
-        apiKey,
-        'manual'
+        textInput,
+        parsed.event_type,
+        value,
+        units,
+        geminiModel,
+        {
+          capture_method: 'manual',
+          user_history_count: userHistory.length,
+          gemini_model: geminiModel,
+          confidence: parsed.confidence,
+          parsed_at: new Date().toISOString()
+        }
       );
 
-      if (!result.success) {
-        throw new Error(result.error || "Failed to process input");
+      // Check if we should search for products
+      let productOptions = null;
+      const shouldSearch = shouldSearchProducts(parsed.event_type, parsed.event_data, parsed.confidence);
+      console.log(`Product search decision: ${shouldSearch} (confidence: ${parsed.confidence}%, type: ${parsed.event_type})`);
+
+      if (shouldSearch) {
+        console.log('Searching product databases...');
+        const searchQuery = parsed.event_data.description || parsed.event_data.name || textInput;
+        console.log(`Search query: "${searchQuery}"`);
+        const usdaApiKey = process.env.EXPO_PUBLIC_USDA_API_KEY;
+        productOptions = await searchAllProducts(searchQuery, usdaApiKey);
+        console.log(`Found ${productOptions.length} product options`);
+      } else {
+        console.log('Skipping product search - confidence is high enough');
       }
 
-      if (result.complete) {
-        // Event was complete and saved successfully
+      // Determine if we should show confirmation screen
+      const needsConfirmation = !parsed.complete ||
+                                (shouldSearch && ['food', 'supplement', 'medication'].includes(parsed.event_type));
+
+      if (parsed.complete && !needsConfirmation) {
+        // Save directly
+        console.log('Saving directly - complete and no confirmation needed');
+        await createVoiceEvent(
+          user.id,
+          parsed.event_type,
+          parsed.event_data,
+          parsed.event_time,
+          auditRecord.id,
+          'manual'
+        );
+        await updateAuditStatus(auditRecord.id, 'parsed');
+
         setTextInput("");
         Alert.alert(
           "Success",
@@ -291,16 +396,23 @@ export default function HomeScreen() {
           [{ text: "OK" }]
         );
       } else {
-        // Need user clarification for missing fields or product selection
+        // Show confirmation screen
+        console.log(`Going to confirmation screen - complete: ${parsed.complete}, products: ${productOptions?.length || 0}, needs confirmation: ${needsConfirmation}`);
+        await updateAuditStatus(auditRecord.id, 'awaiting_user_clarification');
+
+        const missingFields = parsed.complete || !parsed.event_data ? [] : Object.keys(parsed.event_data).filter(
+          field => !parsed.event_data[field]
+        );
+
         router.push({
           pathname: "/confirm",
           params: {
-            data: JSON.stringify(result.parsed),
+            data: JSON.stringify(parsed),
             captureMethod: "manual",
-            auditId: result.auditId,
-            missingFields: JSON.stringify(result.missingFields),
-            productOptions: result.productOptions ? JSON.stringify(result.productOptions) : null,
-            confidence: result.confidence?.toString() || null,
+            auditId: auditRecord.id,
+            missingFields: JSON.stringify(missingFields),
+            productOptions: productOptions ? JSON.stringify(productOptions) : null,
+            confidence: parsed.confidence?.toString() || null,
           },
         });
         setTextInput("");

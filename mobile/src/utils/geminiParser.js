@@ -238,6 +238,190 @@ Output: {
 }
 
 /**
+ * Parse text input using Gemini API (text parsing only, no audio)
+ * @param {string} text - The text input from user
+ * @param {string} apiKey - Gemini API key
+ * @param {Array} userHistory - User's recent events for context
+ * @returns {Promise<{event_type: string, event_data: object, complete: boolean, confidence: number}>}
+ */
+export async function parseTextWithGemini(text, apiKey, userHistory = []) {
+  if (!apiKey) {
+    throw new Error('Gemini API key is required');
+  }
+
+  try {
+    console.log('Parsing text with Gemini...');
+
+    // Extract frequently logged items
+    const frequentItems = extractFrequentItems(userHistory);
+    const userContextSection = frequentItems.length > 0
+      ? `\n\nUSER'S FREQUENTLY LOGGED ITEMS (use these for better accuracy):\n${frequentItems.map(({ item, count }) => `- "${item}" (logged ${count}x)`).join('\n')}\n\nIMPORTANT: When parsing input, check if it matches any of the user's frequent items. For example:\n- "element lemonade" likely means "LMNT lemonade" if that's in their history\n- "chicken thigh" likely refers to their usual preparation if they log it often\n- Brand names and specific products should match their historical entries`
+      : '';
+
+    const systemPrompt = buildSystemPrompt(userContextSection);
+
+    const requestBody = {
+      contents: [{
+        parts: [{
+          text: `${systemPrompt}\n\nUser input: "${text}"`
+        }]
+      }],
+      generationConfig: {
+        temperature: 0.1,
+        maxOutputTokens: 1024,
+        responseMimeType: "application/json"
+      }
+    };
+
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestBody)
+      }
+    );
+
+    console.log('Gemini API response status:', response.status);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Gemini API error response:', errorText);
+      throw new Error(`Gemini API error (${response.status}): ${errorText}`);
+    }
+
+    const result = await response.json();
+    console.log('Gemini API result:', JSON.stringify(result, null, 2));
+
+    if (!result.candidates || result.candidates.length === 0) {
+      throw new Error('No response from Gemini');
+    }
+
+    const content = result.candidates[0].content.parts[0].text;
+    console.log('Gemini response text:', content);
+
+    return parseAndValidateGeminiResponse(content);
+  } catch (error) {
+    console.error('Error parsing text with Gemini:', error);
+    throw error;
+  }
+}
+
+/**
+ * Build system prompt for Gemini
+ */
+function buildSystemPrompt(userContextSection) {
+  return `You are an AI assistant for a health tracking and wellness app. Users log various health events throughout their day to monitor their health, manage conditions like diabetes, and track wellness activities.
+
+CONTEXT: This app helps users track:
+- Food intake with nutritional information
+- Blood glucose readings
+- Insulin doses
+- Physical activities and exercise
+- Supplements and medications
+- Wellness activities (sauna, cold plunge, etc.)
+- Symptoms they're experiencing
+
+Users speak naturally and you need to transcribe and parse their input into structured data.
+
+Return a JSON object with these fields:
+- event_type: one of [food, glucose, insulin, activity, supplement, sauna, medication, symptom]
+- event_data: object containing extracted fields based on event type
+- event_time: ISO 8601 timestamp (use current time if not specified, or parse from their input)
+- confidence: number 0-100 indicating how confident you are in the parsing (100=certain, 50=moderate, 0=guessing)
+
+Event type schemas:
+${JSON.stringify(EVENT_TYPES, null, 2)}
+${userContextSection}
+
+Rules:
+1. Identify the most appropriate event_type from the input
+2. Extract all available information
+3. Use reasonable defaults for units (mg/dL for glucose, units for insulin, minutes for duration, etc.)
+4. For food, try to extract nutritional info if mentioned
+5. For time ranges (e.g., "2:42pm to 3:05pm"), calculate the duration in minutes and use the START time as event_time
+6. For relative times ("30 min jog"), interpret as an activity that started 30 minutes ago
+7. For past times (e.g., "I ate lunch at noon"), use that specific time as event_time
+8. CRITICAL: Match input against user's frequent items for better accuracy (e.g., "element" → "LMNT")
+9. Temperature: default to Fahrenheit unless Celsius is explicitly mentioned
+
+Example outputs:
+
+Input: "Log 6 units of basal insulin"
+Output: {
+  "event_type": "insulin",
+  "event_data": {
+    "value": 6,
+    "units": "units",
+    "insulin_type": "basal"
+  },
+  "event_time": "2024-01-01T12:00:00Z",
+  "confidence": 95
+}
+
+Input: "Sauna from 2:42pm to 3:05pm"
+Output: {
+  "event_type": "sauna",
+  "event_data": {
+    "duration": 23,
+    "temperature": 180,
+    "temperature_units": "F"
+  },
+  "event_time": "2024-01-01T14:42:00Z",
+  "confidence": 90
+}`;
+}
+
+/**
+ * Parse and validate Gemini JSON response
+ */
+function parseAndValidateGeminiResponse(content) {
+  let parsed;
+  try {
+    parsed = JSON.parse(content);
+  } catch (e) {
+    console.error('Failed to parse Gemini JSON response:', e);
+    console.error('Raw content:', content);
+    throw new Error('Gemini returned invalid JSON');
+  }
+
+  // Validate the response has required fields
+  if (!parsed || typeof parsed !== 'object') {
+    console.error('Parsed response is not an object:', parsed);
+    throw new Error('Invalid response from Gemini - not an object');
+  }
+
+  if (!parsed.event_type) {
+    console.error('Missing event_type in response:', parsed);
+    throw new Error('Invalid response from Gemini - missing event_type');
+  }
+
+  if (!parsed.event_data || typeof parsed.event_data !== 'object') {
+    console.error('Missing or invalid event_data in response:', parsed);
+    throw new Error('Invalid response from Gemini - missing or invalid event_data');
+  }
+
+  // Check if all required fields for the event type are present
+  const schema = EVENT_TYPES[parsed.event_type];
+  if (!schema) {
+    throw new Error(`Unknown event type: ${parsed.event_type}`);
+  }
+
+  const complete = schema.required.every(field =>
+    parsed.event_data[field] !== undefined &&
+    parsed.event_data[field] !== null &&
+    parsed.event_data[field] !== ''
+  );
+
+  return {
+    ...parsed,
+    complete
+  };
+}
+
+/**
  * Extract frequently logged items from user history
  */
 function extractFrequentItems(history) {
