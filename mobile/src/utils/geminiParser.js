@@ -70,15 +70,26 @@ export async function parseAudioWithGemini(audioUri, apiKey, userHistory = []) {
       ? `\n\nUSER'S FREQUENTLY LOGGED ITEMS (use these for better accuracy):\n${frequentItems.map(({ item, count }) => `- "${item}" (logged ${count}x)`).join('\n')}\n\nIMPORTANT: When parsing input, check if it matches any of the user's frequent items. For example:\n- "element lemonade" likely means "LMNT lemonade" if that's in their history\n- "chicken thigh" likely refers to their usual preparation if they log it often\n- Brand names and specific products should match their historical entries`
       : '';
 
-    const systemPrompt = `You are a health event parser. Listen to the user's audio recording and extract structured health event data.
+    const systemPrompt = `You are an AI assistant for a health tracking and wellness app. Users log various health events throughout their day to monitor their health, manage conditions like diabetes, and track wellness activities.
 
-CRITICAL: First transcribe the audio, then parse the transcription into structured data.
+CONTEXT: This app helps users track:
+- Food intake with nutritional information
+- Blood glucose readings
+- Insulin doses
+- Physical activities and exercise
+- Supplements and medications
+- Wellness activities (sauna, cold plunge, etc.)
+- Symptoms they're experiencing
+
+Users speak naturally and you need to transcribe and parse their input into structured data.
+
+CRITICAL: First transcribe the audio accurately, then parse the transcription into structured data.
 
 Return a JSON object with these fields:
-- transcription: the text transcription of what the user said
+- transcription: the exact text transcription of what the user said
 - event_type: one of [food, glucose, insulin, activity, supplement, sauna, medication, symptom]
 - event_data: object containing extracted fields based on event type
-- event_time: ISO 8601 timestamp (use current time if not specified)
+- event_time: ISO 8601 timestamp (use current time if not specified, or parse from their input)
 - confidence: number 0-100 indicating how confident you are in the parsing (100=certain, 50=moderate, 0=guessing)
 
 Event type schemas:
@@ -89,13 +100,18 @@ Rules:
 1. Always transcribe exactly what you hear first
 2. Identify the most appropriate event_type from the transcription
 3. Extract all available information
-4. Use reasonable defaults for units (mg/dL for glucose, units for insulin, etc.)
+4. Use reasonable defaults for units (mg/dL for glucose, units for insulin, minutes for duration, etc.)
 5. For food, try to extract nutritional info if mentioned
-6. For timestamps, interpret relative times ("30 min jog" = started 30 min ago)
-7. CRITICAL: Match input against user's frequent items for better accuracy (e.g., "element" → "LMNT")
+6. For time ranges (e.g., "2:42pm to 3:05pm"), calculate the duration in minutes and use the START time as event_time
+7. For relative times ("30 min jog"), interpret as an activity that started 30 minutes ago
+8. For past times (e.g., "I ate lunch at noon"), use that specific time as event_time
+9. CRITICAL: Match input against user's frequent items for better accuracy (e.g., "element" → "LMNT")
+10. Temperature: default to Fahrenheit unless Celsius is explicitly mentioned
 
-Example output format:
-{
+Example outputs:
+
+Input: "Log 6 units of basal insulin"
+Output: {
   "transcription": "Log 6 units of basal insulin",
   "event_type": "insulin",
   "event_data": {
@@ -105,6 +121,19 @@ Example output format:
   },
   "event_time": "2024-01-01T12:00:00Z",
   "confidence": 95
+}
+
+Input: "Sauna from 2:42pm to 3:05pm"
+Output: {
+  "transcription": "Sauna from 2:42pm to 3:05pm",
+  "event_type": "sauna",
+  "event_data": {
+    "duration": 23,
+    "temperature": 180,
+    "temperature_units": "F"
+  },
+  "event_time": "2024-01-01T14:42:00Z",
+  "confidence": 90
 }`;
 
     console.log('Calling Gemini API...');
@@ -160,11 +189,29 @@ Example output format:
     console.log('Gemini response text:', content);
 
     // Parse JSON response
-    const parsed = JSON.parse(content);
+    let parsed;
+    try {
+      parsed = JSON.parse(content);
+    } catch (e) {
+      console.error('Failed to parse Gemini JSON response:', e);
+      console.error('Raw content:', content);
+      throw new Error('Gemini returned invalid JSON');
+    }
 
     // Validate the response has required fields
-    if (!parsed.event_type || !parsed.event_data) {
-      throw new Error('Invalid response from Gemini - missing required fields');
+    if (!parsed || typeof parsed !== 'object') {
+      console.error('Parsed response is not an object:', parsed);
+      throw new Error('Invalid response from Gemini - not an object');
+    }
+
+    if (!parsed.event_type) {
+      console.error('Missing event_type in response:', parsed);
+      throw new Error('Invalid response from Gemini - missing event_type');
+    }
+
+    if (!parsed.event_data || typeof parsed.event_data !== 'object') {
+      console.error('Missing or invalid event_data in response:', parsed);
+      throw new Error('Invalid response from Gemini - missing or invalid event_data');
     }
 
     // Check if all required fields for the event type are present

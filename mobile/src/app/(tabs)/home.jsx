@@ -156,7 +156,7 @@ export default function HomeScreen() {
           console.log(`Going to confirmation screen - complete: ${parsed.complete}, products: ${productOptions?.length || 0}, needs confirmation: ${needsConfirmation}`);
           await updateAuditStatus(auditRecord.id, 'awaiting_user_clarification');
 
-          const missingFields = parsed.complete ? [] : Object.keys(parsed.event_data).filter(
+          const missingFields = parsed.complete || !parsed.event_data ? [] : Object.keys(parsed.event_data).filter(
             field => !parsed.event_data[field]
           );
 
