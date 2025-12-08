@@ -207,11 +207,13 @@ export default function HistoryScreen() {
         onProfilePress={() => router.push("/(tabs)/profile")}
       />
 
-      <FilterChips
-        filters={filters}
-        selectedFilter={selectedFilter}
-        onFilterPress={setSelectedFilter}
-      />
+      <View style={{ marginBottom: 8 }}>
+        <FilterChips
+          filters={filters}
+          selectedFilter={selectedFilter}
+          onFilterPress={setSelectedFilter}
+        />
+      </View>
 
       {isLoading ? (
         <View
@@ -230,7 +232,7 @@ export default function HistoryScreen() {
           style={{ flex: 1 }}
           contentContainerStyle={{
             paddingHorizontal: 20,
-            paddingTop: 12,
+            paddingTop: 0,
             paddingBottom: 140,
           }}
           showsVerticalScrollIndicator={false}
