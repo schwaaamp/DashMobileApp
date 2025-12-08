@@ -89,7 +89,7 @@ Return a JSON object with these fields:
 - transcription: the exact text transcription of what the user said
 - event_type: one of [food, glucose, insulin, activity, supplement, sauna, medication, symptom]
 - event_data: object containing extracted fields based on event type
-- event_time: ISO 8601 timestamp (use current time if not specified, or parse from their input)
+- time_info: object with optional fields: { relative_minutes_ago: number, specific_time: "HH:MM", specific_date: "YYYY-MM-DD" } or null if referring to "now"
 - confidence: number 0-100 indicating how confident you are in the parsing (100=certain, 50=moderate, 0=guessing)
 
 Event type schemas:
@@ -102,11 +102,12 @@ Rules:
 3. Extract all available information
 4. Use reasonable defaults for units (mg/dL for glucose, units for insulin, minutes for duration, etc.)
 5. For food, try to extract nutritional info if mentioned
-6. For time ranges (e.g., "2:42pm to 3:05pm"), calculate the duration in minutes and use the START time as event_time
-7. For relative times ("30 min jog"), interpret as an activity that started 30 minutes ago
-8. For past times (e.g., "I ate lunch at noon"), use that specific time as event_time
-9. CRITICAL: Match input against user's frequent items for better accuracy (e.g., "element" → "LMNT")
-10. Temperature: default to Fahrenheit unless Celsius is explicitly mentioned
+6. For time ranges (e.g., "2:42pm to 3:05pm"), calculate the duration in minutes and set time_info to the START time
+7. For relative times ("30 min jog"), set relative_minutes_ago to indicate when it started
+8. For specific times (e.g., "I ate lunch at noon"), set specific_time to that time
+9. If no time is mentioned, set time_info to null (meaning "now")
+10. CRITICAL: Match input against user's frequent items for better accuracy (e.g., "element" → "LMNT")
+11. Temperature: default to Fahrenheit unless Celsius is explicitly mentioned
 
 Example outputs:
 
@@ -119,7 +120,7 @@ Output: {
     "units": "units",
     "insulin_type": "basal"
   },
-  "event_time": "2024-01-01T12:00:00Z",
+  "time_info": null,
   "confidence": 95
 }
 
@@ -132,7 +133,19 @@ Output: {
     "temperature": 180,
     "temperature_units": "F"
   },
-  "event_time": "2024-01-01T14:42:00Z",
+  "time_info": { "specific_time": "14:42" },
+  "confidence": 90
+}
+
+Input: "30 minute jog"
+Output: {
+  "transcription": "30 minute jog",
+  "event_type": "activity",
+  "event_data": {
+    "activity_type": "jog",
+    "duration": 30
+  },
+  "time_info": { "relative_minutes_ago": 30 },
   "confidence": 90
 }`;
 
@@ -324,12 +337,12 @@ CONTEXT: This app helps users track:
 - Wellness activities (sauna, cold plunge, etc.)
 - Symptoms they're experiencing
 
-Users speak naturally and you need to transcribe and parse their input into structured data.
+Users speak naturally and you need to parse their input into structured data.
 
 Return a JSON object with these fields:
 - event_type: one of [food, glucose, insulin, activity, supplement, sauna, medication, symptom]
 - event_data: object containing extracted fields based on event type
-- event_time: ISO 8601 timestamp (use current time if not specified, or parse from their input)
+- time_info: object with optional fields: { relative_minutes_ago: number, specific_time: "HH:MM", specific_date: "YYYY-MM-DD" } or null if referring to "now"
 - confidence: number 0-100 indicating how confident you are in the parsing (100=certain, 50=moderate, 0=guessing)
 
 Event type schemas:
@@ -341,11 +354,12 @@ Rules:
 2. Extract all available information
 3. Use reasonable defaults for units (mg/dL for glucose, units for insulin, minutes for duration, etc.)
 4. For food, try to extract nutritional info if mentioned
-5. For time ranges (e.g., "2:42pm to 3:05pm"), calculate the duration in minutes and use the START time as event_time
-6. For relative times ("30 min jog"), interpret as an activity that started 30 minutes ago
-7. For past times (e.g., "I ate lunch at noon"), use that specific time as event_time
-8. CRITICAL: Match input against user's frequent items for better accuracy (e.g., "element" → "LMNT")
-9. Temperature: default to Fahrenheit unless Celsius is explicitly mentioned
+5. For time ranges (e.g., "2:42pm to 3:05pm"), calculate the duration in minutes and set time_info to the START time
+6. For relative times ("30 min jog"), set relative_minutes_ago to indicate when it started
+7. For specific times (e.g., "I ate lunch at noon"), set specific_time to that time
+8. If no time is mentioned, set time_info to null (meaning "now")
+9. CRITICAL: Match input against user's frequent items for better accuracy (e.g., "element" → "LMNT")
+10. Temperature: default to Fahrenheit unless Celsius is explicitly mentioned
 
 Example outputs:
 
@@ -357,7 +371,7 @@ Output: {
     "units": "units",
     "insulin_type": "basal"
   },
-  "event_time": "2024-01-01T12:00:00Z",
+  "time_info": null,
   "confidence": 95
 }
 
@@ -369,7 +383,18 @@ Output: {
     "temperature": 180,
     "temperature_units": "F"
   },
-  "event_time": "2024-01-01T14:42:00Z",
+  "time_info": { "specific_time": "14:42" },
+  "confidence": 90
+}
+
+Input: "30 minute jog"
+Output: {
+  "event_type": "activity",
+  "event_data": {
+    "activity_type": "jog",
+    "duration": 30
+  },
+  "time_info": { "relative_minutes_ago": 30 },
   "confidence": 90
 }`;
 }
@@ -445,4 +470,54 @@ function extractFrequentItems(history) {
     .sort((a, b) => b[1] - a[1])
     .slice(0, 20)
     .map(([item, count]) => ({ item, count }));
+}
+
+/**
+ * Calculate event_time from time_info object
+ * @param {object|null} timeInfo - Time information from Gemini parsing
+ * @returns {string} ISO 8601 timestamp
+ */
+export function calculateEventTime(timeInfo) {
+  const now = new Date();
+
+  // If no time info, use current time
+  if (!timeInfo) {
+    return now.toISOString();
+  }
+
+  // If relative time (e.g., "30 minutes ago")
+  if (timeInfo.relative_minutes_ago !== undefined && timeInfo.relative_minutes_ago !== null) {
+    const eventTime = new Date(now.getTime() - (timeInfo.relative_minutes_ago * 60000));
+    return eventTime.toISOString();
+  }
+
+  // If specific time on today (e.g., "2:42pm")
+  if (timeInfo.specific_time) {
+    const [hours, minutes] = timeInfo.specific_time.split(':').map(Number);
+    const eventTime = new Date(now);
+    eventTime.setHours(hours, minutes, 0, 0);
+
+    // If the time is in the future, assume it was yesterday
+    if (eventTime > now) {
+      eventTime.setDate(eventTime.getDate() - 1);
+    }
+
+    return eventTime.toISOString();
+  }
+
+  // If specific date
+  if (timeInfo.specific_date) {
+    const eventTime = new Date(timeInfo.specific_date);
+
+    // If specific_time is also provided, use it
+    if (timeInfo.specific_time) {
+      const [hours, minutes] = timeInfo.specific_time.split(':').map(Number);
+      eventTime.setHours(hours, minutes, 0, 0);
+    }
+
+    return eventTime.toISOString();
+  }
+
+  // Fallback to current time
+  return now.toISOString();
 }

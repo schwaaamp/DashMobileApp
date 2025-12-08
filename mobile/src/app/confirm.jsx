@@ -6,6 +6,7 @@ import { useColors } from '@/components/useColors';
 import Header from '@/components/Header';
 import * as Haptics from 'expo-haptics';
 import { createVoiceEvent, updateAuditStatus } from '@/utils/voiceEventParser';
+import { calculateEventTime } from '@/utils/geminiParser';
 import useUser from '@/utils/auth/useUser';
 import {
   useFonts,
@@ -70,12 +71,15 @@ export default function ConfirmScreen() {
 
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
+      // Calculate actual event time from time_info
+      const eventTime = calculateEventTime(parsedData.time_info);
+
       // Save the event with the final event data (potentially updated with selected product)
       await createVoiceEvent(
         user.id,
         parsedData.event_type,
         finalEventData,
-        parsedData.event_time,
+        eventTime,
         auditId,
         captureMethod
       );

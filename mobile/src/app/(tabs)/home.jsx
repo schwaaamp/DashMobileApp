@@ -31,7 +31,7 @@ import {
   stopRecording,
   deleteAudioFile,
 } from "@/utils/voiceRecording";
-import { parseAudioWithGemini, parseTextWithGemini } from "@/utils/geminiParser";
+import { parseAudioWithGemini, parseTextWithGemini, calculateEventTime } from "@/utils/geminiParser";
 
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
@@ -190,11 +190,15 @@ export default function HomeScreen() {
         if (parsed.complete && !needsConfirmation) {
           // Save directly
           console.log('Saving directly - complete and no confirmation needed');
+
+          // Calculate actual event time from time_info
+          const eventTime = calculateEventTime(parsed.time_info);
+
           await createVoiceEvent(
             user.id,
             parsed.event_type,
             parsed.event_data,
-            parsed.event_time,
+            eventTime,
             auditRecord.id,
             'voice'
           );
@@ -379,11 +383,15 @@ export default function HomeScreen() {
       if (parsed.complete && !needsConfirmation) {
         // Save directly
         console.log('Saving directly - complete and no confirmation needed');
+
+        // Calculate actual event time from time_info
+        const eventTime = calculateEventTime(parsed.time_info);
+
         await createVoiceEvent(
           user.id,
           parsed.event_type,
           parsed.event_data,
-          parsed.event_time,
+          eventTime,
           auditRecord.id,
           'manual'
         );
