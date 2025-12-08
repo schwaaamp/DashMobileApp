@@ -230,8 +230,8 @@ export default function HistoryScreen() {
           style={{ flex: 1 }}
           contentContainerStyle={{
             paddingHorizontal: 20,
-            paddingTop: 8,
-            paddingBottom: insets.bottom + 80,
+            paddingTop: 12,
+            paddingBottom: 140,
           }}
           showsVerticalScrollIndicator={false}
           refreshControl={
@@ -317,14 +317,15 @@ export default function HistoryScreen() {
       <View
         style={{
           position: 'absolute',
-          bottom: insets.bottom,
+          bottom: 0,
           left: 0,
           right: 0,
           backgroundColor: colors.background,
           borderTopWidth: 1,
           borderTopColor: colors.outline,
           paddingHorizontal: 20,
-          paddingVertical: 12,
+          paddingTop: 12,
+          paddingBottom: 12 + insets.bottom,
         }}
       >
         <SearchBar
