@@ -113,6 +113,8 @@ export default function HomeScreen() {
   };
 
   const handleVoicePress = useCallback(async () => {
+    console.log('=== handleVoicePress called, isRecording:', isRecording, 'isProcessing:', isProcessing);
+
     const geminiApiKey = process.env.EXPO_PUBLIC_GEMINI_API_KEY;
 
     if (!geminiApiKey || geminiApiKey === 'your_gemini_api_key_here') {
@@ -125,6 +127,7 @@ export default function HomeScreen() {
 
     try {
       if (isRecording) {
+        console.log('Stopping recording...');
         // Stop recording
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
         setIsRecording(false);
@@ -132,6 +135,7 @@ export default function HomeScreen() {
 
         const audioUri = await stopRecording(recordingRef.current);
         recordingRef.current = null;
+        console.log('Recording stopped, URI:', audioUri);
 
         console.log('Fetching user history for context...');
         const userHistory = await getUserRecentEvents(user.id, 50);
@@ -232,43 +236,23 @@ export default function HomeScreen() {
         }
         setIsProcessing(false);
       } else {
+        console.log('Starting recording...');
         // Start recording
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
         const recording = await startRecording();
         recordingRef.current = recording;
         setIsRecording(true);
+        console.log('Recording started successfully');
       }
     } catch (error) {
       console.error("Voice recording error:", error);
+      console.error("Error stack:", error.stack);
       Alert.alert("Error", error.message || "Failed to record audio. Please try again.");
       setIsRecording(false);
       setIsProcessing(false);
       recordingRef.current = null;
     }
-  }, [isRecording, user, router]);
-
-  const handleCameraPress = useCallback(async () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-
-    const permissionResult = await ImagePicker.requestCameraPermissionsAsync();
-    if (!permissionResult.granted) {
-      Alert.alert(
-        "Permission required",
-        "Camera permission is needed to capture photos.",
-      );
-      return;
-    }
-
-    const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
-      quality: 0.8,
-    });
-
-    if (!result.canceled && result.assets[0]) {
-      await handlePhotoCapture(result.assets[0]);
-    }
-  }, []);
+  }, [isRecording, isProcessing, user, router]);
 
   const handlePhotoCapture = useCallback(
     async (image) => {
@@ -312,6 +296,47 @@ export default function HomeScreen() {
     },
     [upload, router, getAccessToken],
   );
+
+  const handleCameraPress = useCallback(async () => {
+    console.log('=== handleCameraPress called, isProcessing:', isProcessing);
+
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+
+      console.log('Requesting camera permissions...');
+      const permissionResult = await ImagePicker.requestCameraPermissionsAsync();
+      console.log('Camera permission result:', permissionResult);
+
+      if (!permissionResult.granted) {
+        console.log('Camera permission denied');
+        Alert.alert(
+          "Permission required",
+          "Camera permission is needed to capture photos.",
+        );
+        return;
+      }
+
+      console.log('Launching camera...');
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        quality: 0.8,
+      });
+
+      console.log('Camera result:', result);
+
+      if (!result.canceled && result.assets[0]) {
+        console.log('Photo captured, processing...');
+        await handlePhotoCapture(result.assets[0]);
+      } else {
+        console.log('Camera canceled or no image');
+      }
+    } catch (error) {
+      console.error('Camera error:', error);
+      console.error('Camera error stack:', error.stack);
+      Alert.alert("Error", error.message || "Failed to open camera. Please try again.");
+    }
+  }, [isProcessing, handlePhotoCapture]);
 
   const handleTextSubmit = useCallback(async () => {
     if (!textInput.trim()) return;
@@ -553,6 +578,7 @@ export default function HomeScreen() {
         >
           <View style={{ position: "relative", alignSelf: "center", marginBottom: 24 }}>
             <TouchableOpacity
+              testID="mic-button"
               style={{
                 width: 120,
                 height: 120,
@@ -603,6 +629,7 @@ export default function HomeScreen() {
           </View>
 
           <TextInput
+            testID="text-input"
             style={{
               backgroundColor: colors.fieldFill,
               borderRadius: 16,
@@ -623,6 +650,7 @@ export default function HomeScreen() {
 
           <View style={{ flexDirection: "row", gap: 12 }}>
             <TouchableOpacity
+              testID="camera-button"
               style={{
                 flex: 1,
                 height: 48,
@@ -650,6 +678,7 @@ export default function HomeScreen() {
             </TouchableOpacity>
 
             <TouchableOpacity
+              testID="submit-button"
               style={{
                 flex: 1,
                 height: 48,

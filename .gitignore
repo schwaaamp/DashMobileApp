@@ -1,0 +1,60 @@
+# Dependencies
+node_modules/
+mobile/node_modules/
+web/node_modules/
+package-lock.json
+yarn.lock
+
+# Build outputs
+**/build/
+**/dist/
+mobile/android/build/
+mobile/android/app/build/
+mobile/android/.gradle/
+mobile/ios/Pods/
+mobile/ios/build/
+
+# Expo
+.expo/
+mobile/.expo/
+web-build/
+
+# Environment
+.env
+.env.local
+.env.production
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# Temporary
+*.tmp
+.cache/
+
+# Metro cache
+.metro-cache/
+**/caches/
+**/.metro-cache/
+
+# Native
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Misc
+.metro-health-check*
+*.hprof
