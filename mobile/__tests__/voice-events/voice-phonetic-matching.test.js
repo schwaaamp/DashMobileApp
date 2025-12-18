@@ -9,9 +9,9 @@ import { supabase } from '@/utils/supabaseClient';
 
 // Mock dependencies
 jest.mock('@/utils/supabaseClient');
-jest.mock('@/utils/productSearch');
+// DO NOT mock productSearch - we want to test real phonetic matching logic
 
-describe.skip('Voice Phonetic Matching - LMNT (TODO: Not yet implemented)', () => {
+describe('Voice Phonetic Matching - LMNT', () => {
   const mockUserId = 'test-user-123';
   const mockAuditId = 'audit-123';
   const mockVoiceEventId = 'event-456';
@@ -58,42 +58,45 @@ describe.skip('Voice Phonetic Matching - LMNT (TODO: Not yet implemented)', () =
   });
 
   it('should search products with phonetic variations', async () => {
-    // Mock product search to return LMNT products
-    const mockLMNTProducts = [
-      {
-        source: 'openfoodfacts',
-        id: '12345',
-        name: 'LMNT Lemonade Electrolyte Drink Mix',
-        brand: 'LMNT',
-        servingSize: '1 pack (5.8g)',
-        nutrients: {
-          calories: 0,
-          protein: 0,
-          carbs: 0,
-          fat: 0
-        },
-        confidence: 85
-      },
-      {
-        source: 'openfoodfacts',
-        id: '12346',
-        name: 'LMNT Citrus Salt',
-        brand: 'LMNT',
-        servingSize: '1 pack',
-        nutrients: {
-          calories: 0,
-          protein: 0,
-          carbs: 0,
-          fat: 0
-        },
-        confidence: 75
-      }
-    ];
-
-    searchAllProducts.mockResolvedValue(mockLMNTProducts);
-
-    // Mock Gemini API response for parsing
+    // Mock external API calls to Open Food Facts and USDA
+    // The real searchAllProducts will create phonetic variations and search with them
     global.fetch = jest.fn((url) => {
+      // Mock Open Food Facts API - should match "lmnt" variation from "element"
+      if (url.includes('openfoodfacts.org')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({
+            products: [
+              {
+                code: '12345',
+                product_name: 'LMNT Lemonade Electrolyte Drink Mix',
+                brands: 'LMNT',
+                serving_size: '1 pack (5.8g)',
+                nutriments: {
+                  'energy-kcal_100g': 0,
+                  proteins_100g: 0,
+                  carbohydrates_100g: 0,
+                  fat_100g: 0
+                }
+              },
+              {
+                code: '12346',
+                product_name: 'LMNT Citrus Salt',
+                brands: 'LMNT',
+                serving_size: '1 pack',
+                nutriments: {
+                  'energy-kcal_100g': 0,
+                  proteins_100g: 0,
+                  carbohydrates_100g: 0,
+                  fat_100g: 0
+                }
+              }
+            ]
+          })
+        });
+      }
+      // Mock Claude API response for parsing voice input
       if (url.includes('anthropic.com')) {
         return Promise.resolve({
           ok: true,
@@ -115,6 +118,14 @@ describe.skip('Voice Phonetic Matching - LMNT (TODO: Not yet implemented)', () =
               })
             }]
           })
+        });
+      }
+      // Mock USDA API (returns empty for this test)
+      if (url.includes('api.nal.usda.gov')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ foods: [] })
         });
       }
       return Promise.reject(new Error('Unexpected fetch URL'));
@@ -192,15 +203,18 @@ describe.skip('Voice Phonetic Matching - LMNT (TODO: Not yet implemented)', () =
       'voice'
     );
 
-    // Verify searchAllProducts was called
-    expect(searchAllProducts).toHaveBeenCalledWith(
-      expect.stringContaining('lemonade'),
-      expect.any(String)
-    );
-
     // Verify result structure
     expect(result.success).toBe(true);
     expect(result.parsed || result.complete).toBeDefined();
+
+    // Verify that product search found LMNT through phonetic matching
+    expect(result.productOptions).toBeDefined();
+    expect(result.productOptions.length).toBeGreaterThan(0);
+
+    // Verify LMNT brand was found (phonetic match from "element" -> "lmnt")
+    const lmntProduct = result.productOptions.find(p => p.brand === 'LMNT');
+    expect(lmntProduct).toBeDefined();
+    expect(lmntProduct.name).toContain('LMNT');
   });
 
   it('should store voice_events entry with LMNT product data', async () => {
@@ -355,45 +369,56 @@ describe.skip('Voice Phonetic Matching - LMNT (TODO: Not yet implemented)', () =
 
   it('should handle phonetic brand name matching in productSearch', async () => {
     // Test the phonetic matching algorithm directly
-    const mockProducts = [
-      {
-        name: 'LMNT Electrolytes',
-        brand: 'LMNT',
-        confidence: 0
-      },
-      {
-        name: 'Regular Lemonade',
-        brand: 'Generic',
-        confidence: 0
-      }
-    ];
-
-    // The phonetic matching should boost LMNT's confidence score
-    // "element" (remove vowels) -> "lmnt" matches "LMNT" brand
     const query = 'element lemonade';
     const queryPhonetic = 'element'.replace(/[aeiou]/g, ''); // "lmnt"
 
     // Check that phonetic transformation works
     expect(queryPhonetic).toBe('lmnt');
 
-    // When searchAllProducts is called with "element lemonade",
-    // it should also search with "lmnt lemonade" as a variation
-    searchAllProducts.mockImplementation(async (searchQuery) => {
-      if (searchQuery.includes('lmnt') || searchQuery.includes('element')) {
-        return [
-          {
-            source: 'openfoodfacts',
-            name: 'LMNT Lemonade',
-            brand: 'LMNT',
-            confidence: 85
-          }
-        ];
+    // Mock external API calls - Open Food Facts should return LMNT when searching "lmnt"
+    global.fetch = jest.fn((url) => {
+      if (url.includes('openfoodfacts.org')) {
+        // The real searchAllProducts will search with phonetic variations
+        // So we'll return LMNT products when the API is called
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({
+            products: [
+              {
+                code: 'lmnt-001',
+                product_name: 'LMNT Lemonade Electrolyte Drink Mix',
+                brands: 'LMNT',
+                serving_size: '1 pack',
+                nutriments: {
+                  'energy-kcal_100g': 0,
+                  proteins_100g: 0,
+                  carbohydrates_100g: 0,
+                  fat_100g: 0
+                }
+              }
+            ]
+          })
+        });
       }
-      return [];
+      if (url.includes('api.nal.usda.gov')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ foods: [] })
+        });
+      }
+      return Promise.reject(new Error('Unexpected fetch URL'));
     });
 
+    // Call the real searchAllProducts - it should create phonetic variations
     const results = await searchAllProducts(query, null);
+
+    // Verify LMNT products were found through phonetic matching
     expect(results.length).toBeGreaterThan(0);
-    expect(results[0].brand).toBe('LMNT');
+    const lmntProduct = results.find(p => p.brand === 'LMNT');
+    expect(lmntProduct).toBeDefined();
+    expect(lmntProduct.name).toContain('LMNT');
+    expect(lmntProduct.confidence).toBeGreaterThan(0);
   });
 });
