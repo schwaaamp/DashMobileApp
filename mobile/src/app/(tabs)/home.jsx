@@ -259,32 +259,43 @@ export default function HomeScreen() {
       try {
         setIsProcessing(true);
 
-        const { url, error } = await upload({ reactNativeAsset: image });
-        if (error) {
-          throw new Error("Failed to upload image");
+        const geminiApiKey = process.env.EXPO_PUBLIC_GEMINI_API_KEY;
+        if (!geminiApiKey || geminiApiKey === 'your_gemini_api_key_here') {
+          Alert.alert("Configuration Required", "Please set your Gemini API key in the .env file.");
+          return;
         }
 
-        const token = await getAccessToken();
-        const response = await fetch("/api/photo/analyze", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({ imageUrl: url }),
-        });
+        // Import photo processing function
+        const { processPhotoInput } = require('@/utils/photoEventParser');
 
-        if (!response.ok) {
-          throw new Error("Failed to analyze photo");
+        // Process photo end-to-end with multi-supplement detection
+        const result = await processPhotoInput(
+          image.uri,
+          user.id,
+          geminiApiKey,
+          'photo'
+        );
+
+        if (!result.success) {
+          throw new Error(result.error || 'Failed to process photo');
         }
 
-        const parsedData = await response.json();
-
+        // Navigate to confirmation screen with detected items
         router.push({
           pathname: "/confirm",
           params: {
-            data: JSON.stringify(parsedData),
+            data: JSON.stringify({
+              event_type: result.items[0]?.event_type || 'supplement',
+              event_data: {},
+              time_info: { is_current_time: true }
+            }),
             captureMethod: "photo",
+            auditId: result.auditId,
+            confidence: result.items[0]?.confidence?.toString() || '80',
+            metadata: JSON.stringify({
+              detected_items: result.items,
+              photo_url: result.photoUrl
+            })
           },
         });
       } catch (error) {
@@ -294,7 +305,7 @@ export default function HomeScreen() {
         setIsProcessing(false);
       }
     },
-    [upload, router, getAccessToken],
+    [user, router],
   );
 
   const handleCameraPress = useCallback(async () => {

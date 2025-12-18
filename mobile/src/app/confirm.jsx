@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, Alert } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, Alert, TextInput } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useColors } from '@/components/useColors';
@@ -34,9 +34,31 @@ export default function ConfirmScreen() {
   const captureMethod = params.captureMethod || 'manual';
   const productOptions = params.productOptions ? JSON.parse(params.productOptions) : null;
   const confidence = params.confidence ? parseInt(params.confidence) : null;
+  const metadata = params.metadata ? JSON.parse(params.metadata) : null;
 
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [finalEventData, setFinalEventData] = useState(parsedData?.event_data || {});
+
+  // Follow-up mode state for photo-based multi-item supplements
+  const [followUpMode, setFollowUpMode] = useState(false);
+  const [followUpQuestion, setFollowUpQuestion] = useState(null);
+  const [followUpAnswer, setFollowUpAnswer] = useState('');
+  const [followUpField, setFollowUpField] = useState(null);
+  const [currentItemIndex, setCurrentItemIndex] = useState(0);
+  const [detectedItems, setDetectedItems] = useState([]);
+
+  useEffect(() => {
+    // Detect follow-up mode from route params (photo-based multi-item supplements)
+    if (metadata?.detected_items && Array.isArray(metadata.detected_items)) {
+      setFollowUpMode(true);
+      setDetectedItems(metadata.detected_items);
+      if (metadata.detected_items.length > 0) {
+        const firstItem = metadata.detected_items[0];
+        setFollowUpQuestion(firstItem.followUpQuestion);
+        setFollowUpField('dosage');
+      }
+    }
+  }, [metadata]);
 
   useEffect(() => {
     // If a product is selected, update the event data with its nutritional info
@@ -63,6 +85,43 @@ export default function ConfirmScreen() {
 
   const handleConfirm = async () => {
     try {
+      // Handle follow-up mode for photo-based multi-item supplements
+      if (followUpMode && followUpAnswer.trim()) {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+
+        const { handleFollowUpResponse } = require('@/utils/photoEventParser');
+        const result = await handleFollowUpResponse(
+          auditId,
+          currentItemIndex,
+          followUpAnswer,
+          user.id
+        );
+
+        if (!result.success) {
+          Alert.alert('Error', result.error || 'Failed to save event. Please try again.');
+          return;
+        }
+
+        // Check if there are more items to process
+        if (currentItemIndex < detectedItems.length - 1) {
+          // Move to next item
+          const nextIndex = currentItemIndex + 1;
+          const nextItem = detectedItems[nextIndex];
+          setCurrentItemIndex(nextIndex);
+          setFollowUpQuestion(nextItem.followUpQuestion);
+          setFollowUpAnswer('');
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        } else {
+          // All items processed - update audit status and navigate back
+          await updateAuditStatus(auditId, 'awaiting_user_clarification_success');
+          Alert.alert('Success', `All ${detectedItems.length} supplement(s) saved successfully!`, [
+            { text: 'OK', onPress: () => router.back() }
+          ]);
+        }
+        return;
+      }
+
+      // Original confirmation flow for non-photo events
       // If product options exist (not null/undefined) and has items, require selection
       if (productOptions && Array.isArray(productOptions) && productOptions.length > 0 && selectedProduct === null) {
         Alert.alert('Selection Required', 'Please select a product from the list or choose "Other" to proceed.');
@@ -325,6 +384,105 @@ export default function ConfirmScreen() {
           >
             Event Type: {parsedData.event_type}
           </Text>
+
+          {/* Follow-up Question UI for Photo-Based Multi-Item Supplements */}
+          {followUpMode && followUpQuestion && (
+            <View
+              style={{
+                backgroundColor: colors.accentLilac,
+                borderRadius: 16,
+                padding: 20,
+                marginBottom: 16,
+              }}
+            >
+              <Text
+                style={{
+                  fontSize: 16,
+                  fontFamily: 'Poppins_600SemiBold',
+                  color: colors.primary,
+                  marginBottom: 4,
+                }}
+              >
+                {detectedItems.length > 1 && `Item ${currentItemIndex + 1} of ${detectedItems.length}`}
+              </Text>
+              <Text
+                style={{
+                  fontSize: 15,
+                  fontFamily: 'Poppins_400Regular',
+                  color: colors.text,
+                  marginBottom: 16,
+                }}
+              >
+                {followUpQuestion}
+              </Text>
+
+              {/* Quick selection buttons for common quantities */}
+              <View
+                style={{
+                  flexDirection: 'row',
+                  gap: 8,
+                  marginBottom: 12,
+                }}
+              >
+                {[1, 2, 3].map((num) => (
+                  <TouchableOpacity
+                    key={num}
+                    onPress={() => {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                      setFollowUpAnswer(num.toString());
+                    }}
+                    style={{
+                      flex: 1,
+                      backgroundColor:
+                        followUpAnswer === num.toString()
+                          ? colors.primary
+                          : colors.background,
+                      borderRadius: 12,
+                      padding: 16,
+                      alignItems: 'center',
+                      borderWidth: 2,
+                      borderColor:
+                        followUpAnswer === num.toString()
+                          ? colors.primary
+                          : colors.border,
+                    }}
+                  >
+                    <Text
+                      style={{
+                        fontSize: 18,
+                        fontFamily: 'Poppins_600SemiBold',
+                        color:
+                          followUpAnswer === num.toString()
+                            ? colors.background
+                            : colors.text,
+                      }}
+                    >
+                      {num}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              {/* Text input for other amounts */}
+              <TextInput
+                style={{
+                  backgroundColor: colors.background,
+                  borderRadius: 12,
+                  padding: 12,
+                  fontSize: 15,
+                  fontFamily: 'Poppins_400Regular',
+                  color: colors.text,
+                  borderWidth: 2,
+                  borderColor: colors.border,
+                }}
+                placeholder="Other amount..."
+                placeholderTextColor={colors.textSecondary}
+                value={followUpAnswer}
+                onChangeText={setFollowUpAnswer}
+                keyboardType="numeric"
+              />
+            </View>
+          )}
 
           {missingFields.length > 0 && (
             <View

@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find:*)",
+      "Bash(git rm:*)",
+      "Bash(git add:*)",
+      "Bash(~/Library/Android/sdk/emulator/emulator:*)",
+      "Bash(git commit --amend -m \"$(cat <<''EOF''\nAdd comprehensive test suite with pre-commit hooks\n\nThis commit adds a comprehensive test suite and pre-commit hooks to ensure code quality.\nAdded proper .gitignore files to exclude node_modules, build artifacts, cache directories,\nand other files that should not be version controlled.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>\nEOF\n)\")",
+      "Bash(npx eas-cli:*)",
+      "Bash(echo:*)",
+      "Bash(ANDROID_HOME=~/Library/Android/sdk npx expo prebuild:*)",
+      "Bash(ANDROID_HOME=~/Library/Android/sdk ./android/gradlew:*)",
+      "Bash(/usr/libexec/java_home:*)",
+      "Bash(readlink:*)",
+      "Bash(cat:*)",
+      "Bash(mkdir:*)",
+      "Bash(npm test:*)"
+    ]
+  }
+}
