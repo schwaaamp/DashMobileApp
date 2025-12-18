@@ -56,7 +56,7 @@ export async function searchOpenFoodFacts(query, limit = 10) {
  * Search USDA FoodData Central (generic foods)
  * Requires API key: https://fdc.nal.usda.gov/api-key-signup.html
  */
-export async function searchUSDAFoodData(query, apiKey, limit = 10) {
+export async function searchUSDAFoodData(query, apiKey = process.env.EXPO_PUBLIC_USDA_API_KEY, limit = 10) {
   if (!apiKey || apiKey === 'your_usda_api_key_here') {
     console.log('USDA API key not configured, skipping USDA search');
     return [];
@@ -209,7 +209,7 @@ function createPhoneticVariations(query) {
 /**
  * Search all product databases
  */
-export async function searchAllProducts(query, usdaApiKey = null) {
+export async function searchAllProducts(query, usdaApiKey = process.env.EXPO_PUBLIC_USDA_API_KEY) {
   console.log(`Searching products for: "${query}"`);
 
   const allSearches = [];
