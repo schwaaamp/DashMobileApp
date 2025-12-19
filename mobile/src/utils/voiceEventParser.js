@@ -6,6 +6,12 @@ import { Logger } from './logger';
  * Fetch user's recent events for context
  */
 export async function getUserRecentEvents(userId, limit = 50) {
+  // Validate userId - return empty array if invalid (defensive programming)
+  if (!userId || typeof userId !== 'string') {
+    console.warn('getUserRecentEvents called with invalid userId:', userId);
+    return [];
+  }
+
   try {
     const { data, error } = await supabase
       .from('voice_events')
@@ -283,6 +289,44 @@ Output: {"event_type": "food", "event_data": {"description": "large chicken thig
  * Insert audit record into voice_records_audit table
  */
 export async function createAuditRecord(userId, rawText, eventType, value, units, nlpModel = null, nlpMetadata = null) {
+  // CRITICAL: Validate userId before attempting database insert
+  // This prevents RLS policy violations when userId is undefined/null
+  if (!userId) {
+    const error = new Error('userId is required to create audit record');
+    console.error('createAuditRecord validation failed:', {
+      userId,
+      rawTextPreview: rawText?.substring(0, 50),
+      eventType,
+      globalUserId: global.userId,
+      stack: error.stack
+    });
+    throw error;
+  }
+
+  // Additional validation: ensure userId is a string (UUID format)
+  if (typeof userId !== 'string') {
+    const error = new Error(`userId must be a string, got: ${typeof userId}`);
+    console.error('createAuditRecord type validation failed:', { userId, type: typeof userId });
+    throw error;
+  }
+
+  // Validate UUID format
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!uuidRegex.test(userId)) {
+    const error = new Error(`userId has invalid UUID format: ${userId}`);
+    console.error('createAuditRecord UUID validation failed:', { userId });
+    throw error;
+  }
+
+  // Log the attempt for debugging
+  await Logger.debug('voice_processing', 'Creating audit record', {
+    userId,
+    eventType,
+    rawTextLength: rawText?.length,
+    hasValue: value !== null,
+    hasUnits: units !== null
+  }, userId);
+
   const { data, error } = await supabase
     .from('voice_records_audit')
     .insert({
@@ -300,8 +344,21 @@ export async function createAuditRecord(userId, rawText, eventType, value, units
 
   if (error) {
     console.error('Error creating audit record:', error);
-    throw new Error('Failed to create audit record');
+    await Logger.error('voice_processing', 'Failed to create audit record', {
+      userId,
+      error: error.message,
+      code: error.code,
+      details: error.details,
+      hint: error.hint
+    }, userId);
+    throw new Error(`Failed to create audit record: ${error.message}`);
   }
+
+  await Logger.info('voice_processing', 'Audit record created successfully', {
+    auditId: data.id,
+    userId,
+    eventType
+  }, userId);
 
   return data;
 }

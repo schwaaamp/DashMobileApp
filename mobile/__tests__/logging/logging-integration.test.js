@@ -20,7 +20,7 @@ import { supabase } from '@/utils/supabaseClient';
 jest.mock('@/utils/supabaseClient');
 
 describe('Logging Integration Tests', () => {
-  const mockUserId = 'test-user-123';
+  const mockUserId = '12345678-1234-1234-1234-123456789012';
   let insertedLogs = [];
 
   beforeEach(() => {

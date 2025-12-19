@@ -12,7 +12,7 @@ jest.mock('@/utils/supabaseClient');
 // DO NOT mock productSearch - we want to test real phonetic matching logic
 
 describe('Voice Phonetic Matching - LMNT', () => {
-  const mockUserId = 'test-user-123';
+  const mockUserId = '12345678-1234-1234-1234-123456789012';
   const mockAuditId = 'audit-123';
   const mockVoiceEventId = 'event-456';
   const testInput = 'lemonade element pack';

@@ -24,6 +24,7 @@ import Header from "@/components/Header.jsx";
 import useUpload from "@/utils/useUpload.js";
 import { useAuth } from "@/utils/auth/useAuth";
 import useUser from "@/utils/auth/useUser";
+import { requireUserId } from "@/utils/auth/getUserId";
 import { getUserRecentEvents, createAuditRecord, updateAuditStatus, createVoiceEvent } from "@/utils/voiceEventParser";
 import { shouldSearchProducts, searchAllProducts } from "@/utils/productSearch";
 import {
@@ -138,8 +139,11 @@ export default function HomeScreen() {
         recordingRef.current = null;
         console.log('Recording stopped, URI:', audioUri);
 
+        // Get userId reliably (no race condition with useUser hook)
+        const userId = await requireUserId(user?.id);
+
         console.log('Fetching user history for context...');
-        const userHistory = await getUserRecentEvents(user.id, 50);
+        const userHistory = await getUserRecentEvents(userId, 50);
         console.log(`Found ${userHistory.length} recent events`);
 
         // Parse audio with Gemini (transcription + parsing in one call)
@@ -157,7 +161,7 @@ export default function HomeScreen() {
         // Create audit record
         const geminiModel = 'gemini-2.5-flash';
         const auditRecord = await createAuditRecord(
-          user.id,
+          userId,
           parsed.transcription,
           parsed.event_type,
           value,
@@ -200,7 +204,7 @@ export default function HomeScreen() {
           const eventTime = calculateEventTime(parsed.time_info);
 
           await createVoiceEvent(
-            user.id,
+            userId,
             parsed.event_type,
             parsed.event_data,
             eventTime,
@@ -266,13 +270,16 @@ export default function HomeScreen() {
           return;
         }
 
+        // Get userId reliably (no race condition with useUser hook)
+        const userId = await requireUserId(user?.id);
+
         // Import photo processing function
         const { processPhotoInput } = require('@/utils/photoEventParser');
 
         // Process photo end-to-end with multi-supplement detection
         const result = await processPhotoInput(
           image.uri,
-          user.id,
+          userId,
           geminiApiKey,
           'photo'
         );
@@ -366,8 +373,11 @@ export default function HomeScreen() {
       setIsProcessing(true);
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
+      // Get userId reliably (no race condition with useUser hook)
+      const userId = await requireUserId(user?.id);
+
       console.log('Fetching user history for context...');
-      const userHistory = await getUserRecentEvents(user.id, 50);
+      const userHistory = await getUserRecentEvents(userId, 50);
       console.log(`Found ${userHistory.length} recent events`);
 
       // Parse text with Gemini
@@ -382,7 +392,7 @@ export default function HomeScreen() {
       // Create audit record
       const geminiModel = 'gemini-2.5-flash';
       const auditRecord = await createAuditRecord(
-        user.id,
+        userId,
         textInput,
         parsed.event_type,
         value,
@@ -425,7 +435,7 @@ export default function HomeScreen() {
         const eventTime = calculateEventTime(parsed.time_info);
 
         await createVoiceEvent(
-          user.id,
+          userId,
           parsed.event_type,
           parsed.event_data,
           eventTime,

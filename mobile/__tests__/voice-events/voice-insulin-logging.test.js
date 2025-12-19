@@ -15,7 +15,7 @@ jest.mock('@/utils/supabaseClient');
 jest.mock('@/utils/productSearch');
 
 describe('Voice Insulin Logging', () => {
-  const mockUserId = 'test-user-123';
+  const mockUserId = '12345678-1234-1234-1234-123456789012';
   const mockAuditId = 'audit-456';
   const mockVoiceEventId = 'event-456';
   const testInput = '6 units basal insulin';

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import * as SupabaseAuth from "@/utils/supabaseAuth";
 import { signInWithGoogleWebBrowser, redirectUri } from "./googleAuth";
 import { Platform } from "react-native";
+import { supabase } from "@/utils/supabaseClient";
 
 export const useAuth = () => {
   const [isReady, setIsReady] = useState(false);
@@ -15,6 +16,19 @@ export const useAuth = () => {
 
   const checkSession = useCallback(async () => {
     const currentSession = await SupabaseAuth.getSession();
+
+    // If we have a stored session, also set it on the Supabase client
+    if (currentSession) {
+      const { error: sessionError } = await supabase.auth.setSession({
+        access_token: currentSession.access_token,
+        refresh_token: currentSession.refresh_token,
+      });
+
+      if (sessionError) {
+        console.error("Error restoring session on Supabase client:", sessionError);
+      }
+    }
+
     setSession(currentSession);
     setIsAuthenticated(!!currentSession);
     setIsReady(true);
@@ -52,6 +66,17 @@ export const useAuth = () => {
 
       if (result.session) {
         await SupabaseAuth.saveSession(result.session);
+
+        // CRITICAL: Set session on Supabase client for RLS policies to work
+        const { error: sessionError } = await supabase.auth.setSession({
+          access_token: result.session.access_token,
+          refresh_token: result.session.refresh_token,
+        });
+
+        if (sessionError) {
+          console.error("Error setting session on Supabase client:", sessionError);
+        }
+
         setSession(result.session);
         setIsAuthenticated(true);
         console.log("Sign-in successful!");
@@ -71,6 +96,10 @@ export const useAuth = () => {
 
   const signOut = useCallback(async () => {
     await SupabaseAuth.signOut();
+
+    // Also sign out from Supabase client
+    await supabase.auth.signOut();
+
     setSession(null);
     setIsAuthenticated(false);
     setError(null);
@@ -93,6 +122,17 @@ export const useAuth = () => {
       };
 
       await SupabaseAuth.saveSession(newSession);
+
+      // CRITICAL: Set session on Supabase client for RLS policies to work
+      const { error: sessionError } = await supabase.auth.setSession({
+        access_token: newSession.access_token,
+        refresh_token: newSession.refresh_token,
+      });
+
+      if (sessionError) {
+        console.error("Error setting session on Supabase client (WebView):", sessionError);
+      }
+
       setSession(newSession);
       setIsAuthenticated(true);
       setShowAuthWebView(false);

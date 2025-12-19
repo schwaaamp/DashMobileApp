@@ -14,7 +14,7 @@ jest.mock('@/utils/supabaseClient');
 jest.mock('@/utils/productSearch');
 
 describe('Text Time Range Parsing - Sauna', () => {
-  const mockUserId = 'test-user-123';
+  const mockUserId = '12345678-1234-1234-1234-123456789012';
   const mockAuditId = 'audit-789';
   const mockVoiceEventId = 'event-789';
   const testInput = 'sauna 2-2:25pm';
