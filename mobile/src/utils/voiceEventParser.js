@@ -1,5 +1,6 @@
 import { supabase } from './supabaseClient';
 import { searchAllProducts, shouldSearchProducts } from './productSearch';
+import { Logger } from './logger';
 
 /**
  * Fetch user's recent events for context
@@ -94,7 +95,7 @@ const EVENT_TYPES = {
  * @param {Array} userHistory - User's recent events for context
  * @returns {Promise<{event_type: string, event_data: object, complete: boolean}>}
  */
-export async function parseTextWithClaude(text, apiKey, userHistory = []) {
+export async function parseTextWithClaude(text, apiKey, userHistory = [], userId = null) {
   if (!apiKey) {
     throw new Error('Claude API key is required');
   }
@@ -150,6 +151,7 @@ Output: {"event_type": "food", "event_data": {"description": "large chicken thig
 
     console.log('Calling Claude API with model:', requestBody.model);
 
+    const startTime = Date.now();
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -159,8 +161,19 @@ Output: {"event_type": "food", "event_data": {"description": "large chicken thig
       },
       body: JSON.stringify(requestBody)
     });
+    const duration = Date.now() - startTime;
 
     console.log('Claude API response status:', response.status);
+
+    // Log API call
+    await Logger.apiCall(
+      'Claude',
+      '/v1/messages',
+      { model: requestBody.model, input_length: text.length },
+      { status: response.status, ok: response.ok },
+      duration,
+      userId
+    );
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -177,22 +190,63 @@ Output: {"event_type": "food", "event_data": {"description": "large chicken thig
     const result = await response.json();
     const content = result.content[0].text;
 
+    // Log raw API response before parsing
+    await Logger.info('parsing', 'Received Claude API response', {
+      input_text: text,
+      response_length: content.length,
+      response_preview: content.substring(0, 500)
+    }, userId);
+
     // Extract JSON from the response (Claude might wrap it in markdown)
     const jsonMatch = content.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
+      await Logger.error('parsing', 'Failed to extract JSON from Claude response', {
+        input_text: text,
+        raw_response: content,
+        response_length: content.length
+      }, userId);
       throw new Error('Failed to extract JSON from Claude response');
     }
 
-    const parsed = JSON.parse(jsonMatch[0]);
+    // Log the extracted JSON string before parsing
+    await Logger.debug('parsing', 'Extracted JSON from response', {
+      extracted_json_preview: jsonMatch[0].substring(0, 500)
+    }, userId);
+
+    let parsed;
+    try {
+      parsed = JSON.parse(jsonMatch[0]);
+      await Logger.parsingAttempt(text, parsed, null, userId);
+    } catch (jsonError) {
+      await Logger.parsingAttempt(text, null, jsonError, userId);
+      await Logger.error('parsing', 'JSON parse error', {
+        input_text: text,
+        extracted_json: jsonMatch[0],
+        error_message: jsonError.message,
+        error_stack: jsonError.stack
+      }, userId);
+      throw jsonError;
+    }
 
     // Validate the response has required fields
     if (!parsed.event_type || !parsed.event_data) {
+      await Logger.error('parsing', 'Invalid Claude response - missing required fields', {
+        input_text: text,
+        parsed_object: parsed,
+        has_event_type: !!parsed.event_type,
+        has_event_data: !!parsed.event_data
+      }, userId);
       throw new Error('Invalid response from Claude - missing required fields');
     }
 
     // Check if all required fields for the event type are present
     const schema = EVENT_TYPES[parsed.event_type];
     if (!schema) {
+      await Logger.error('parsing', 'Unknown event type', {
+        input_text: text,
+        event_type: parsed.event_type,
+        valid_types: Object.keys(EVENT_TYPES)
+      }, userId);
       throw new Error(`Unknown event type: ${parsed.event_type}`);
     }
 
@@ -202,12 +256,25 @@ Output: {"event_type": "food", "event_data": {"description": "large chicken thig
       parsed.event_data[field] !== ''
     );
 
+    await Logger.info('parsing', 'Successfully parsed event', {
+      input_text: text,
+      event_type: parsed.event_type,
+      complete,
+      confidence: parsed.confidence,
+      missing_fields: schema.required.filter(f => !parsed.event_data[f])
+    }, userId);
+
     return {
       ...parsed,
       complete
     };
   } catch (error) {
     console.error('Error parsing with Claude:', error);
+    await Logger.error('parsing', 'parseTextWithClaude failed', {
+      input_text: text,
+      error_message: error.message,
+      error_stack: error.stack
+    }, userId);
     throw error;
   }
 }
@@ -284,6 +351,14 @@ export async function createVoiceEvent(userId, eventType, eventData, eventTime, 
  */
 export async function processTextInput(text, userId, apiKey, captureMethod = 'manual', transcriptionMetadata = null) {
   try {
+    // Log the start of processing
+    await Logger.info('voice_processing', 'Starting text input processing', {
+      input_text: text,
+      input_length: text.length,
+      capture_method: captureMethod,
+      has_transcription_metadata: !!transcriptionMetadata
+    }, userId);
+
     // Step 1: Fetch user's recent events for context
     console.log('Fetching user history for context...');
     const userHistory = await getUserRecentEvents(userId, 50);
@@ -306,7 +381,7 @@ export async function processTextInput(text, userId, apiKey, captureMethod = 'ma
 
     try {
       // Step 3: Parse with Claude (with user history context)
-      const parsed = await parseTextWithClaude(text, apiKey, userHistory);
+      const parsed = await parseTextWithClaude(text, apiKey, userHistory, userId);
       const confidence = parsed.confidence || 50;
 
       console.log(`Parsing confidence: ${confidence}%`);
@@ -333,13 +408,30 @@ export async function processTextInput(text, userId, apiKey, captureMethod = 'ma
       const shouldSearch = shouldSearchProducts(parsed.event_type, parsed.event_data, confidence);
       console.log(`Product search decision: ${shouldSearch} (confidence: ${confidence}%, type: ${parsed.event_type})`);
 
+      await Logger.info('voice_processing', 'Product search decision', {
+        should_search: shouldSearch,
+        event_type: parsed.event_type,
+        confidence,
+        input_text: text
+      }, userId);
+
       if (shouldSearch) {
         console.log('Searching product databases...');
         const searchQuery = parsed.event_data.description || parsed.event_data.name || text;
         console.log(`Search query: "${searchQuery}"`);
         const usdaApiKey = process.env.EXPO_PUBLIC_USDA_API_KEY;
-        productOptions = await searchAllProducts(searchQuery, usdaApiKey);
+        productOptions = await searchAllProducts(searchQuery, usdaApiKey, userId);
         console.log(`Found ${productOptions.length} product options`);
+
+        await Logger.info('voice_processing', 'Product search completed', {
+          search_query: searchQuery,
+          results_count: productOptions.length,
+          top_results: productOptions.slice(0, 3).map(p => ({
+            name: p.name,
+            brand: p.brand,
+            confidence: p.confidence
+          }))
+        }, userId);
       } else {
         console.log('Skipping product search - confidence is high enough');
       }
@@ -390,11 +482,23 @@ export async function processTextInput(text, userId, apiKey, captureMethod = 'ma
       }
     } catch (parseError) {
       // Parsing failed
+      await Logger.error('voice_processing', 'Parsing failed in processTextInput', {
+        input_text: text,
+        error_message: parseError.message,
+        error_stack: parseError.stack,
+        audit_id: auditRecord.id
+      }, userId);
       await updateAuditStatus(auditRecord.id, 'error');
       throw parseError;
     }
   } catch (error) {
     console.error('Error processing text input:', error);
+    await Logger.error('voice_processing', 'processTextInput failed', {
+      input_text: text,
+      error_message: error.message,
+      error_stack: error.stack,
+      capture_method: captureMethod
+    }, userId);
     return {
       success: false,
       error: error.message

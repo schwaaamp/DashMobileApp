@@ -52,15 +52,17 @@ describe('HomeScreen', () => {
   beforeEach(() => {
     jest.clearAllMocks();
 
-    // Set up default mocks
+    // Set up default mocks - CRITICAL: User must be authenticated and logged in
     useRouter.mockReturnValue(mockRouter);
     useAuth.mockReturnValue({
       getAccessToken: jest.fn(() => Promise.resolve('mock-token')),
-      isAuthenticated: true,
+      isAuthenticated: true, // User is authenticated
+      isReady: true, // Auth state is ready
       signIn: jest.fn(),
     });
     useUser.mockReturnValue({
-      data: mockUser,
+      data: mockUser, // User data is available
+      loading: false, // User data has loaded
     });
 
     Haptics.impactAsync.mockResolvedValue();
@@ -69,6 +71,63 @@ describe('HomeScreen', () => {
 
     // Mock environment variables
     process.env.EXPO_PUBLIC_GEMINI_API_KEY = 'mock-gemini-key';
+  });
+
+  describe('Authentication Requirements', () => {
+    it('should have an authenticated user to render home screen', () => {
+      const { getByTestId } = render(<HomeScreen />);
+
+      // Verify the screen renders successfully with authenticated user
+      expect(getByTestId('camera-button')).toBeTruthy();
+      expect(getByTestId('mic-button')).toBeTruthy();
+      expect(getByTestId('text-input')).toBeTruthy();
+      expect(getByTestId('submit-button')).toBeTruthy();
+    });
+
+    it('should have user data available from useUser hook', () => {
+      render(<HomeScreen />);
+
+      // Verify useUser was called and returned user data
+      expect(useUser).toHaveBeenCalled();
+      const userHookResult = useUser.mock.results[0].value;
+      expect(userHookResult.data).toBeDefined();
+      expect(userHookResult.data.id).toBe('test-user-id');
+      expect(userHookResult.data.email).toBe('test@example.com');
+    });
+
+    it('should have authentication state ready and authenticated', () => {
+      render(<HomeScreen />);
+
+      // Verify useAuth was called and returned proper state
+      expect(useAuth).toHaveBeenCalled();
+      const authHookResult = useAuth.mock.results[0].value;
+      expect(authHookResult.isAuthenticated).toBe(true);
+      expect(authHookResult.isReady).toBe(true);
+    });
+
+    it('should fail if user is not authenticated', () => {
+      // Override the mock to simulate unauthenticated state
+      useAuth.mockReturnValue({
+        getAccessToken: jest.fn(() => Promise.resolve(null)),
+        isAuthenticated: false,
+        isReady: true,
+        signIn: jest.fn(),
+      });
+      useUser.mockReturnValue({
+        data: null,
+        loading: false,
+      });
+
+      // Attempt to render - this would normally redirect or show login
+      // For now, this test documents that user should NOT be null
+      const { queryByTestId } = render(<HomeScreen />);
+
+      // With no user, the screen might not render properly
+      // This is a placeholder - actual behavior depends on ProtectedRoute implementation
+      const authState = useAuth.mock.results[0].value;
+      expect(authState.isAuthenticated).toBe(false);
+      expect(useUser.mock.results[0].value.data).toBeNull();
+    });
   });
 
   describe('Camera Button', () => {

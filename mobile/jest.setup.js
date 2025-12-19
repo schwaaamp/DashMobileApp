@@ -69,8 +69,12 @@ jest.mock('expo-av', () => ({
   },
 }));
 
-jest.mock('expo-file-system/legacy', () => ({
+jest.mock('expo-file-system', () => ({
   deleteAsync: jest.fn(() => Promise.resolve()),
+  readAsStringAsync: jest.fn(() => Promise.resolve('base64encodedimage')),
+  EncodingType: {
+    Base64: 'base64',
+  },
 }));
 
 jest.mock('expo/fetch', () => ({

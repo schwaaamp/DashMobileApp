@@ -32,6 +32,7 @@ import {
   deleteAudioFile,
 } from "@/utils/voiceRecording";
 import { parseAudioWithGemini, parseTextWithGemini, calculateEventTime } from "@/utils/geminiParser";
+import { ProtectedRoute } from "@/components/ProtectedRoute";
 
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
@@ -559,14 +560,15 @@ export default function HomeScreen() {
   }
 
   return (
-    <View style={{ flex: 1, backgroundColor: colors.background }}>
-      <Header
-        title="HealthLog"
-        showCredits={false}
-        onMenuPress={() => {}}
-        onProfilePress={() => router.push("/(tabs)/profile")}
-        userInitials={getUserInitials()}
-      />
+    <ProtectedRoute>
+      <View style={{ flex: 1, backgroundColor: colors.background }}>
+        <Header
+          title="HealthLog"
+          showCredits={false}
+          onMenuPress={() => {}}
+          onProfilePress={() => router.push("/(tabs)/profile")}
+          userInitials={getUserInitials()}
+        />
 
       <ScrollView
         style={{ flex: 1 }}
@@ -768,5 +770,6 @@ export default function HomeScreen() {
         </View>
       </ScrollView>
     </View>
+    </ProtectedRoute>
   );
 }

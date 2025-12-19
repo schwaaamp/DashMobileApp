@@ -3,17 +3,30 @@
  * Uses multiple data sources: Open Food Facts, USDA FoodData Central
  */
 
+import { Logger } from './logger';
+
 /**
  * Search Open Food Facts database (branded products, supplements)
  * Free API, no key required
  */
-export async function searchOpenFoodFacts(query, limit = 10) {
+export async function searchOpenFoodFacts(query, limit = 10, userId = null) {
   try {
     const encodedQuery = encodeURIComponent(query);
     const url = `https://world.openfoodfacts.org/cgi/search.pl?search_terms=${encodedQuery}&search_simple=1&action=process&json=1&page_size=${limit}`;
     console.log(`Open Food Facts URL: ${url}`);
 
+    const startTime = Date.now();
     const response = await fetch(url);
+    const duration = Date.now() - startTime;
+
+    await Logger.apiCall(
+      'OpenFoodFacts',
+      '/cgi/search.pl',
+      { query, limit },
+      { status: response.status, ok: response.ok },
+      duration,
+      userId
+    );
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -23,6 +36,12 @@ export async function searchOpenFoodFacts(query, limit = 10) {
 
     const data = await response.json();
     console.log(`Open Food Facts returned ${data.products?.length || 0} products`);
+
+    await Logger.info('product_search', 'Open Food Facts search completed', {
+      query,
+      results_count: data.products?.length || 0,
+      duration_ms: duration
+    }, userId);
 
     if (!data.products || data.products.length === 0) {
       return [];
@@ -47,6 +66,11 @@ export async function searchOpenFoodFacts(query, limit = 10) {
     })).sort((a, b) => b.confidence - a.confidence);
   } catch (error) {
     console.error('Error searching Open Food Facts:', error);
+    await Logger.error('product_search', 'Open Food Facts search failed', {
+      query,
+      error_message: error.message,
+      error_stack: error.stack
+    }, userId);
     // Return empty array instead of throwing - don't let API errors block the flow
     return [];
   }
@@ -56,15 +80,26 @@ export async function searchOpenFoodFacts(query, limit = 10) {
  * Search USDA FoodData Central (generic foods)
  * Requires API key: https://fdc.nal.usda.gov/api-key-signup.html
  */
-export async function searchUSDAFoodData(query, apiKey = process.env.EXPO_PUBLIC_USDA_API_KEY, limit = 10) {
+export async function searchUSDAFoodData(query, apiKey = process.env.EXPO_PUBLIC_USDA_API_KEY, limit = 10, userId = null) {
   if (!apiKey || apiKey === 'your_usda_api_key_here') {
     console.log('USDA API key not configured, skipping USDA search');
     return [];
   }
 
   try {
+    const startTime = Date.now();
     const response = await fetch(
       `https://api.nal.usda.gov/fdc/v1/foods/search?api_key=${apiKey}&query=${encodeURIComponent(query)}&pageSize=${limit}`
+    );
+    const duration = Date.now() - startTime;
+
+    await Logger.apiCall(
+      'USDA',
+      '/fdc/v1/foods/search',
+      { query, limit },
+      { status: response.status, ok: response.ok },
+      duration,
+      userId
     );
 
     if (!response.ok) {
@@ -72,6 +107,12 @@ export async function searchUSDAFoodData(query, apiKey = process.env.EXPO_PUBLIC
     }
 
     const data = await response.json();
+
+    await Logger.info('product_search', 'USDA search completed', {
+      query,
+      results_count: data.foods?.length || 0,
+      duration_ms: duration
+    }, userId);
 
     if (!data.foods || data.foods.length === 0) {
       return [];
@@ -105,6 +146,11 @@ export async function searchUSDAFoodData(query, apiKey = process.env.EXPO_PUBLIC
     }).sort((a, b) => b.confidence - a.confidence);
   } catch (error) {
     console.error('Error searching USDA FoodData:', error);
+    await Logger.error('product_search', 'USDA search failed', {
+      query,
+      error_message: error.message,
+      error_stack: error.stack
+    }, userId);
     return [];
   }
 }
@@ -209,25 +255,36 @@ function createPhoneticVariations(query) {
 /**
  * Search all product databases
  */
-export async function searchAllProducts(query, usdaApiKey = process.env.EXPO_PUBLIC_USDA_API_KEY) {
+export async function searchAllProducts(query, usdaApiKey = process.env.EXPO_PUBLIC_USDA_API_KEY, userId = null) {
   console.log(`Searching products for: "${query}"`);
+
+  await Logger.info('product_search', 'Starting product search', {
+    query,
+    query_length: query.length
+  }, userId);
 
   const allSearches = [];
 
   // Search with original query
   allSearches.push(
-    searchOpenFoodFacts(query, 12),
-    searchUSDAFoodData(query, usdaApiKey, 12)
+    searchOpenFoodFacts(query, 12, userId),
+    searchUSDAFoodData(query, usdaApiKey, 12, userId)
   );
 
   // Create phonetic variations (e.g., "element lemonade" -> ["lmnt lemonade", "element lmnd"])
   const phoneticVariations = createPhoneticVariations(query);
 
+  await Logger.info('product_search', 'Created phonetic variations', {
+    original_query: query,
+    variations: phoneticVariations,
+    variations_count: phoneticVariations.length
+  }, userId);
+
   for (const variation of phoneticVariations) {
     console.log(`Also searching variation: "${variation}"`);
     allSearches.push(
-      searchOpenFoodFacts(variation, 8),
-      searchUSDAFoodData(variation, usdaApiKey, 8)
+      searchOpenFoodFacts(variation, 8, userId),
+      searchUSDAFoodData(variation, usdaApiKey, 8, userId)
     );
   }
 
@@ -253,6 +310,17 @@ export async function searchAllProducts(query, usdaApiKey = process.env.EXPO_PUB
   uniqueProducts.sort((a, b) => b.confidence - a.confidence);
 
   console.log(`Found ${uniqueProducts.length} unique products`);
+
+  await Logger.info('product_search', 'Product search completed', {
+    query,
+    total_unique_products: uniqueProducts.length,
+    top_10_results: uniqueProducts.slice(0, 10).map(p => ({
+      name: p.name,
+      brand: p.brand,
+      confidence: p.confidence,
+      source: p.source
+    }))
+  }, userId);
 
   // Return top 10
   return uniqueProducts.slice(0, 10);

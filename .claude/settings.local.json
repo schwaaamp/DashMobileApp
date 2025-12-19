@@ -14,7 +14,10 @@
       "Bash(readlink:*)",
       "Bash(cat:*)",
       "Bash(mkdir:*)",
-      "Bash(npm test:*)"
+      "Bash(npm test:*)",
+      "Bash(tail:*)",
+      "Bash(chmod:*)",
+      "Bash(ls:*)"
     ]
   }
 }

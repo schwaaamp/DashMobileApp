@@ -12,9 +12,15 @@ export const useUser = () => {
     try {
       const currentUser = await SupabaseAuth.getUser();
       setUser(currentUser);
+
+      // Set global.userId for logging infrastructure
+      if (currentUser?.id) {
+        global.userId = currentUser.id;
+      }
     } catch (error) {
       console.error("Error fetching user:", error);
       setUser(null);
+      global.userId = null; // Clear on error
     } finally {
       setLoading(false);
     }
@@ -28,6 +34,7 @@ export const useUser = () => {
         // Clear user when logged out
         setUser(null);
         setLoading(false);
+        global.userId = null; // Clear global userId on logout
       }
     }
   }, [isAuthenticated, isReady, fetchUser]);
