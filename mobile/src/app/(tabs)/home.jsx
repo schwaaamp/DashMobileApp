@@ -155,11 +155,49 @@ export default function HomeScreen() {
         // Clean up audio file
         await deleteAudioFile(audioUri);
 
+        // CRITICAL: Check user's product registry FIRST (Phase 2 - Self-Learning)
+        // This must happen BEFORE we use Gemini's classification
+        const { checkUserProductRegistry, fuzzyMatchUserProducts } = require('@/utils/productRegistry');
+
+        let registryMatch = await checkUserProductRegistry(parsed.transcription, userId);
+        let fuzzyMatch = null;
+
+        if (registryMatch) {
+          console.log(`Found exact match in user product registry: ${registryMatch.product_name} (${registryMatch.times_logged} times)`);
+
+          // Override Gemini's classification with registry data
+          parsed.event_type = registryMatch.event_type;
+          parsed.event_data = registryMatch.event_type === 'food'
+            ? { description: registryMatch.product_name }
+            : { name: registryMatch.product_name, dosage: '1 serving', units: 'serving' };
+          parsed.confidence = 95;
+          parsed.complete = true;
+
+          console.log(`Registry override: ${registryMatch.event_type} - ${registryMatch.product_name}`);
+        } else {
+          // Try fuzzy match if no exact match
+          fuzzyMatch = await fuzzyMatchUserProducts(parsed.transcription, userId);
+          if (fuzzyMatch) {
+            console.log(`Found fuzzy match in user product registry: ${fuzzyMatch.product_name} (${fuzzyMatch.times_logged} times)`);
+
+            // Override Gemini's classification with fuzzy match
+            parsed.event_type = fuzzyMatch.event_type;
+            parsed.event_data = fuzzyMatch.event_type === 'food'
+              ? { description: fuzzyMatch.product_name }
+              : { name: fuzzyMatch.product_name, dosage: '1 serving', units: 'serving' };
+            parsed.confidence = 95;
+            parsed.complete = true;
+
+            console.log(`Fuzzy match override: ${fuzzyMatch.event_type} - ${fuzzyMatch.product_name}`);
+          }
+        }
+
         // Extract value and units based on event type
         const { value, units } = extractValueAndUnits(parsed.event_type, parsed.event_data);
 
         // Create audit record
-        const geminiModel = 'gemini-2.5-flash';
+        const geminiModel = registryMatch ? 'registry_bypass' : (fuzzyMatch ? 'registry_fuzzy_bypass' : 'gemini-2.5-flash');
+        const matchInfo = registryMatch || fuzzyMatch;
         const auditRecord = await createAuditRecord(
           userId,
           parsed.transcription,
@@ -172,7 +210,14 @@ export default function HomeScreen() {
             user_history_count: userHistory.length,
             gemini_model: geminiModel,
             confidence: parsed.confidence,
-            parsed_at: new Date().toISOString()
+            parsed_at: new Date().toISOString(),
+            ...(matchInfo && {
+              registry_match: {
+                source: matchInfo.source,
+                times_logged: matchInfo.times_logged,
+                product_name: matchInfo.product_name
+              }
+            })
           }
         );
 
