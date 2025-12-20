@@ -53,19 +53,49 @@ jest.mock('expo-image-picker', () => ({
   },
 }));
 
-jest.mock('expo-av', () => ({
-  Audio: {
-    requestPermissionsAsync: jest.fn(() => Promise.resolve({ granted: true })),
-    setAudioModeAsync: jest.fn(() => Promise.resolve()),
-    Recording: jest.fn(() => ({
-      prepareToRecordAsync: jest.fn(() => Promise.resolve()),
-      startAsync: jest.fn(() => Promise.resolve()),
-      stopAndUnloadAsync: jest.fn(() => Promise.resolve()),
-      getURI: jest.fn(() => 'file://test-audio.m4a'),
-    })),
-    RecordingOptionsPresets: {
-      HIGH_QUALITY: {},
+jest.mock('expo-audio', () => ({
+  getRecordingPermissionsAsync: jest.fn(() => Promise.resolve({ granted: false })),
+  requestRecordingPermissionsAsync: jest.fn(() => Promise.resolve({ granted: true })),
+  setAudioModeAsync: jest.fn(() => Promise.resolve()),
+  RecordingPresets: {
+    HIGH_QUALITY: {
+      isMeteringEnabled: true,
+      android: {
+        extension: '.m4a',
+        outputFormat: 2,
+        audioEncoder: 3,
+        sampleRate: 44100,
+        numberOfChannels: 2,
+        bitRate: 128000,
+      },
+      ios: {
+        extension: '.m4a',
+        outputFormat: 'mpeg4aac',
+        audioQuality: 127,
+        sampleRate: 44100,
+        numberOfChannels: 2,
+        bitRate: 128000,
+        linearPCMBitDepth: 16,
+        linearPCMIsBigEndian: false,
+        linearPCMIsFloat: false,
+      },
+      web: {
+        mimeType: 'audio/webm',
+        bitsPerSecond: 128000,
+      },
     },
+  },
+}));
+
+jest.mock('expo-audio/build/AudioModule', () => ({
+  __esModule: true,
+  default: {
+    AudioRecorder: jest.fn().mockImplementation(() => ({
+      prepareToRecordAsync: jest.fn(() => Promise.resolve()),
+      record: jest.fn(),
+      stop: jest.fn(() => Promise.resolve()),
+      uri: 'file://test-audio.m4a',
+    })),
   },
 }));
 

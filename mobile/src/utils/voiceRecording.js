@@ -1,4 +1,10 @@
-import { Audio } from 'expo-av';
+import {
+  getRecordingPermissionsAsync,
+  requestRecordingPermissionsAsync,
+  setAudioModeAsync,
+  RecordingPresets,
+} from 'expo-audio';
+import AudioModule from 'expo-audio/build/AudioModule';
 import * as FileSystem from 'expo-file-system/legacy';
 import { fetch as expoFetch } from 'expo/fetch';
 
@@ -7,8 +13,27 @@ import { fetch as expoFetch } from 'expo/fetch';
  */
 export async function requestAudioPermissions() {
   try {
-    const { status } = await Audio.requestPermissionsAsync();
-    return status === 'granted';
+    console.log('Checking audio permissions...');
+
+    // First check if we already have permissions
+    const existingPermission = await getRecordingPermissionsAsync();
+    console.log('Existing permission:', existingPermission);
+
+    if (existingPermission.granted) {
+      console.log('Permission already granted');
+      return true;
+    }
+
+    // If not, request permissions
+    console.log('Requesting new permission...');
+    const permission = await requestRecordingPermissionsAsync();
+    console.log('Permission response:', permission);
+
+    // expo-audio returns { granted: boolean }
+    const isGranted = permission.granted === true;
+    console.log('Permission granted:', isGranted);
+
+    return isGranted;
   } catch (error) {
     console.error('Error requesting audio permissions:', error);
     return false;
@@ -27,17 +52,17 @@ export async function startRecording() {
     }
 
     // Set audio mode for recording
-    await Audio.setAudioModeAsync({
-      allowsRecordingIOS: true,
-      playsInSilentModeIOS: true,
+    await setAudioModeAsync({
+      allowsRecording: true,
+      playsInSilentMode: true,
     });
 
-    // Create and start recording
-    const { recording } = await Audio.Recording.createAsync(
-      Audio.RecordingOptionsPresets.HIGH_QUALITY
-    );
+    // Create and start recording with expo-audio
+    const recorder = new AudioModule.AudioRecorder(RecordingPresets.HIGH_QUALITY);
+    await recorder.prepareToRecordAsync();
+    recorder.record();
 
-    return recording;
+    return recorder;
   } catch (error) {
     console.error('Error starting recording:', error);
     throw error;
@@ -47,14 +72,14 @@ export async function startRecording() {
 /**
  * Stop recording and return the URI
  */
-export async function stopRecording(recording) {
+export async function stopRecording(recorder) {
   try {
-    await recording.stopAndUnloadAsync();
-    const uri = recording.getURI();
+    await recorder.stop();
+    const uri = recorder.uri;
 
     // Reset audio mode
-    await Audio.setAudioModeAsync({
-      allowsRecordingIOS: false,
+    await setAudioModeAsync({
+      allowsRecording: false,
     });
 
     return uri;
