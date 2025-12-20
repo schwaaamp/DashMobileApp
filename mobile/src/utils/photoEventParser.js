@@ -177,14 +177,14 @@ export async function processPhotoInput(photoPath, userId, apiKey, captureMethod
       analysis.items[0].event_type, // Use first item's type for record
       null, // value
       null, // units
-      'gemini-2.5-flash',
+      'gemini-1.5-flash',
       {
         capture_method: 'photo',
         photo_url: photoUrl,
         confidence: analysis.confidence,
         items_detected: analysis.items.length,
         detected_items: itemsWithServingInfo,
-        gemini_model: 'gemini-2.5-flash'
+        gemini_model: 'gemini-1.5-flash'
       }
     );
 

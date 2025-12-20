@@ -52,7 +52,7 @@ const mockUserId = "test-user-123";
   value: 1,
   units: "pack",
   nlp_status: "awaiting_user_clarification_success",
-  nlp_model: "gemini-2.5-flash",
+  nlp_model: "gemini-1.5-flash",
   nlp_metadata: {
     capture_method: "voice",
     confidence: 85,
@@ -208,7 +208,7 @@ const currentTime = new Date("2025-12-18T14:00:00Z"); // 2pm today
   value: 25,
   units: "minutes",
   nlp_status: "parsed",
-  nlp_model: "gemini-2.5-flash",
+  nlp_model: "gemini-1.5-flash",
   nlp_metadata: {
     capture_method: "manual",
     confidence: 95,
@@ -274,7 +274,7 @@ const mockUserId = "test-user-123";
   value: 6,
   units: "units",
   nlp_status: "parsed",
-  nlp_model: "gemini-2.5-flash",
+  nlp_model: "gemini-1.5-flash",
   nlp_metadata: {
     capture_method: "voice",
     confidence: 98,
@@ -464,7 +464,7 @@ async function createMultiItemFoodEvent(userId, items, eventTime, auditId) {
   value: 3,  // Number of items
   units: "items",
   nlp_status: "parsed",
-  nlp_model: "gemini-2.5-flash",
+  nlp_model: "gemini-1.5-flash",
   nlp_metadata: {
     capture_method: "voice",
     multi_item_count: 3,
