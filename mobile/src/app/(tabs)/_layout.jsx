@@ -25,7 +25,7 @@ export default function TabLayout() {
         tabBarLabelStyle: {
           fontSize: 11,
           fontFamily: "Poppins_500Medium",
-          marginBottom: 4,
+          marginBottom: Platform.OS === "ios" ? 0 : 4,
         },
         tabBarIconStyle: {
           marginTop: 4,

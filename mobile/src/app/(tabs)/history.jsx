@@ -28,7 +28,6 @@ import {
 import * as Haptics from "expo-haptics";
 import { useColors } from "@/components/useColors.jsx";
 import Header from "@/components/Header.jsx";
-import FilterChips from "@/components/FilterChips.jsx";
 import SearchBar from "@/components/SearchBar.jsx";
 import EmptyState from "@/components/EmptyState.jsx";
 import { useAuth } from "@/utils/auth/useAuth";
@@ -69,25 +68,19 @@ export default function HistoryScreen() {
     Poppins_600SemiBold,
   });
 
-  const [selectedFilter, setSelectedFilter] = useState("All");
   const [searchQuery, setSearchQuery] = useState("");
 
   const { data, isLoading, refetch, isRefetching } = useQuery({
-    queryKey: ["events", selectedFilter, user?.id],
+    queryKey: ["events", user?.id],
     queryFn: async () => {
       if (!user?.id) return [];
 
-      let query = supabase
+      const query = supabase
         .from('voice_events')
         .select('*')
         .eq('user_id', user.id)
         .order('event_time', { ascending: false })
         .limit(100);
-
-      // Filter by event type if not "All"
-      if (selectedFilter !== "All") {
-        query = query.eq('event_type', selectedFilter.toLowerCase());
-      }
 
       const { data, error } = await query;
 
@@ -100,16 +93,6 @@ export default function HistoryScreen() {
     },
     enabled: !!user?.id,
   });
-
-  const filters = [
-    "All",
-    "Food",
-    "Glucose",
-    "Insulin",
-    "Activity",
-    "Supplement",
-    "Medication",
-  ];
 
   const handleEventPress = useCallback(
     (eventId) => {
@@ -171,11 +154,11 @@ export default function HistoryScreen() {
       case "activity":
         return `${data.activity_type} - ${data.duration}min`;
       case "supplement":
-        return `${data.name} ${data.dosage}${data.units || ''}`;
+        return `${data.name} ${data.dosage} ${data.units || ''}`.trim();
       case "sauna":
         return `${data.duration}min at ${data.temperature}°${data.temperature_units || 'F'}`;
       case "medication":
-        return `${data.name} ${data.dosage}${data.units || ''}`;
+        return `${data.name} ${data.dosage} ${data.units || ''}`.trim();
       case "symptom":
         return data.description || "Symptom logged";
       default:
@@ -228,14 +211,6 @@ export default function HistoryScreen() {
         onMenuPress={() => {}}
         onProfilePress={() => router.push("/(tabs)/profile")}
       />
-
-      <View style={{ marginBottom: 8 }}>
-        <FilterChips
-          filters={filters}
-          selectedFilter={selectedFilter}
-          onFilterPress={setSelectedFilter}
-        />
-      </View>
 
       {isLoading ? (
         <View
