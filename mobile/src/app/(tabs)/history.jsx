@@ -195,12 +195,28 @@ export default function HistoryScreen() {
     return null;
   }
 
-  const filteredEvents =
-    data?.filter((event) => {
+  // Filter and deduplicate events to ensure unique keys
+  const filteredEvents = React.useMemo(() => {
+    if (!data) return [];
+
+    // Filter by search query
+    const filtered = data.filter((event) => {
       if (!searchQuery) return true;
       const summary = getEventSummary(event).toLowerCase();
       return summary.includes(searchQuery.toLowerCase());
-    }) || [];
+    });
+
+    // Deduplicate by ID to ensure unique keys
+    const seen = new Set();
+    return filtered.filter((event) => {
+      if (seen.has(event.id)) {
+        console.warn('Duplicate event ID detected:', event.id);
+        return false;
+      }
+      seen.add(event.id);
+      return true;
+    });
+  }, [data, searchQuery]);
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.background }}>
