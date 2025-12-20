@@ -51,7 +51,20 @@ const GEMINI_RESPONSE_SCHEMA = {
     },
     event_data: {
       type: "OBJECT",
-      description: "Event-specific data fields"
+      description: "Event-specific data fields",
+      properties: {
+        description: { type: "STRING", nullable: true },
+        name: { type: "STRING", nullable: true },
+        brand: { type: "STRING", nullable: true },
+        dosage: { type: "STRING", nullable: true },
+        units: { type: "STRING", nullable: true },
+        value: { type: "NUMBER", nullable: true },
+        duration: { type: "STRING", nullable: true },
+        intensity: { type: "STRING", nullable: true },
+        temperature: { type: "STRING", nullable: true },
+        route: { type: "STRING", nullable: true },
+        severity: { type: "STRING", nullable: true }
+      }
     },
     time_info: {
       type: "OBJECT",
@@ -90,7 +103,20 @@ const TEXT_RESPONSE_SCHEMA = {
     },
     event_data: {
       type: "OBJECT",
-      description: "Event-specific data fields"
+      description: "Event-specific data fields",
+      properties: {
+        description: { type: "STRING", nullable: true },
+        name: { type: "STRING", nullable: true },
+        brand: { type: "STRING", nullable: true },
+        dosage: { type: "STRING", nullable: true },
+        units: { type: "STRING", nullable: true },
+        value: { type: "NUMBER", nullable: true },
+        duration: { type: "STRING", nullable: true },
+        intensity: { type: "STRING", nullable: true },
+        temperature: { type: "STRING", nullable: true },
+        route: { type: "STRING", nullable: true },
+        severity: { type: "STRING", nullable: true }
+      }
     },
     time_info: {
       type: "OBJECT",
