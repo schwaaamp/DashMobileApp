@@ -17,7 +17,8 @@
       "Bash(npm test:*)",
       "Bash(tail:*)",
       "Bash(chmod:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(git push)"
     ]
   }
 }
