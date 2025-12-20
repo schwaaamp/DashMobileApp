@@ -258,11 +258,11 @@ export default function HistoryScreen() {
           }
         >
           <View style={{ gap: 12 }}>
-            {filteredEvents.map((event) => {
+            {filteredEvents.map((event, index) => {
               const Icon = EVENT_TYPE_ICONS[event.event_type] || FileText;
               return (
                 <TouchableOpacity
-                  key={event.id}
+                  key={`${event.id}-${index}`}
                   style={{
                     backgroundColor: colors.cardBackground,
                     borderRadius: 16,
