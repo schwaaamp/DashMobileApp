@@ -277,12 +277,15 @@ Output: {
         temperature: 0.1,
         maxOutputTokens: 2048,
         responseMimeType: "application/json",
-        responseSchema: GEMINI_RESPONSE_SCHEMA
+        responseSchema: GEMINI_RESPONSE_SCHEMA,
+        thinkingConfig: {
+          thinkingBudget: 0  // Disable thinking process to save tokens
+        }
       }
     };
 
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-002:generateContent?key=${apiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
       {
         method: 'POST',
         headers: {
@@ -392,12 +395,15 @@ export async function parseTextWithGemini(text, apiKey, userHistory = []) {
         temperature: 0.1,
         maxOutputTokens: 2048,
         responseMimeType: "application/json",
-        responseSchema: TEXT_RESPONSE_SCHEMA
+        responseSchema: TEXT_RESPONSE_SCHEMA,
+        thinkingConfig: {
+          thinkingBudget: 0  // Disable thinking process to save tokens
+        }
       }
     };
 
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-002:generateContent?key=${apiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
       {
         method: 'POST',
         headers: {
