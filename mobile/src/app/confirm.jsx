@@ -69,10 +69,10 @@ export default function ConfirmScreen() {
 
       if (parsedData.event_type === 'food') {
         updatedData.description = `${product.brand ? product.brand + ' ' : ''}${product.name}`;
-        if (product.nutrients.calories) updatedData.calories = product.nutrients.calories;
-        if (product.nutrients.protein) updatedData.protein = product.nutrients.protein;
-        if (product.nutrients.carbs) updatedData.carbs = product.nutrients.carbs;
-        if (product.nutrients.fat) updatedData.fat = product.nutrients.fat;
+        if (product.nutrients?.calories) updatedData.calories = product.nutrients.calories;
+        if (product.nutrients?.protein) updatedData.protein = product.nutrients.protein;
+        if (product.nutrients?.carbs) updatedData.carbs = product.nutrients.carbs;
+        if (product.nutrients?.fat) updatedData.fat = product.nutrients.fat;
         if (product.servingSize) updatedData.serving_size = product.servingSize;
       } else if (parsedData.event_type === 'supplement' || parsedData.event_type === 'medication') {
         updatedData.name = `${product.brand ? product.brand + ' ' : ''}${product.name}`;
@@ -82,7 +82,8 @@ export default function ConfirmScreen() {
     } else {
       setFinalEventData(parsedData?.event_data || {});
     }
-  }, [selectedProduct, productOptions, parsedData]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedProduct, selectedProduct ? productOptions[selectedProduct] : null]);
 
   const handleConfirm = async () => {
     try {
@@ -326,22 +327,22 @@ export default function ConfirmScreen() {
                     )}
                     {product.nutrients && (
                       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-                        {product.nutrients.calories && (
+                        {product.nutrients.calories && typeof product.nutrients.calories === 'number' && (
                           <Text style={{ fontSize: 12, fontFamily: 'Poppins_400Regular', color: colors.textSecondary }}>
                             Cal: {Math.round(product.nutrients.calories)}
                           </Text>
                         )}
-                        {product.nutrients.protein && (
+                        {product.nutrients.protein && typeof product.nutrients.protein === 'number' && (
                           <Text style={{ fontSize: 12, fontFamily: 'Poppins_400Regular', color: colors.textSecondary }}>
                             P: {Math.round(product.nutrients.protein)}g
                           </Text>
                         )}
-                        {product.nutrients.carbs && (
+                        {product.nutrients.carbs && typeof product.nutrients.carbs === 'number' && (
                           <Text style={{ fontSize: 12, fontFamily: 'Poppins_400Regular', color: colors.textSecondary }}>
                             C: {Math.round(product.nutrients.carbs)}g
                           </Text>
                         )}
-                        {product.nutrients.fat && (
+                        {product.nutrients.fat && typeof product.nutrients.fat === 'number' && (
                           <Text style={{ fontSize: 12, fontFamily: 'Poppins_400Regular', color: colors.textSecondary }}>
                             F: {Math.round(product.nutrients.fat)}g
                           </Text>
