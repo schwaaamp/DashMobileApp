@@ -84,6 +84,4 @@ CREATE TRIGGER user_product_registry_updated_at_trigger
   EXECUTE FUNCTION update_user_product_registry_updated_at();
 
 -- Comment for documentation
-COMMENT ON TABLE user_product_registry IS
-  'Stores user-specific product classifications learned from confirmed entries. ' ||
-  'Used for self-learning classification that improves accuracy over time.';
+COMMENT ON TABLE user_product_registry IS 'Stores user-specific product classifications learned from confirmed entries. Used for self-learning classification that improves accuracy over time.';

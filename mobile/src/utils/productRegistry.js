@@ -128,6 +128,10 @@ export async function fuzzyMatchUserProducts(description, userId) {
 
     const normalizedInput = normalizeProductKey(description);
 
+    // Helper: Check phonetic similarity (removes vowels for comparison)
+    // e.g., "element" -> "lmnt", "citrus" -> "ctrs"
+    const getPhoneticForm = (word) => word.replace(/[aeiou]/g, '');
+
     // Find best match using word-level matching (order-independent)
     for (const product of data) {
       // First try exact substring match (faster, preserves existing behavior)
@@ -154,9 +158,44 @@ export async function fuzzyMatchUserProducts(description, userId) {
         };
       }
 
-      // Fall back to word-level matching (order-independent)
+      // Second try phonetic matching (handles "element" -> "lmnt")
       const inputWords = normalizedInput.split(' ').filter(w => w.length > 0);
       const productWords = product.product_key.split(' ').filter(w => w.length > 0);
+
+      const phoneticMatch = inputWords.every(inputWord => {
+        const inputPhonetic = getPhoneticForm(inputWord);
+        return productWords.some(productWord => {
+          const productPhonetic = getPhoneticForm(productWord);
+          // Match if phonetic forms are equal (e.g., "element" = "lmnt" -> "lmnt" = "lmnt")
+          return inputPhonetic === productPhonetic ||
+                 inputPhonetic.includes(productPhonetic) ||
+                 productPhonetic.includes(inputPhonetic);
+        });
+      });
+
+      if (phoneticMatch && inputWords.length > 0) {
+        try {
+          await Logger.info('registry', 'Found fuzzy match in user product registry', {
+            input: description,
+            matched_product: product.product_name,
+            event_type: product.event_type,
+            times_logged: product.times_logged,
+            match_type: 'phonetic'
+          }, userId);
+        } catch (logErr) {
+          // Don't let logging errors break the main flow
+        }
+
+        return {
+          event_type: product.event_type,
+          product_name: product.product_name,
+          brand: product.brand,
+          times_logged: product.times_logged,
+          source: 'user_registry_fuzzy'
+        };
+      }
+
+      // Fall back to word-level matching (order-independent)
 
       // Check if all input words exist in product_key (any order)
       const allWordsMatch = inputWords.every(inputWord =>
