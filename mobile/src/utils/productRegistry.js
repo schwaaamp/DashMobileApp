@@ -8,7 +8,7 @@
  */
 
 import { supabase } from './supabaseClient';
-import Logger from './logger';
+import { Logger } from './logger';
 
 /**
  * Normalize product name for consistent matching
@@ -23,8 +23,8 @@ function normalizeProductKey(name) {
   return name
     .toLowerCase()
     .trim()
-    .replace(/\s+/g, ' ')           // Normalize multiple spaces to single space
-    .replace(/[^\w\s]/g, '');       // Remove special chars (punctuation, etc.)
+    .replace(/[^\w\s]/g, '')        // Remove special chars (punctuation, etc.) FIRST
+    .replace(/\s+/g, ' ');          // THEN normalize multiple spaces to single space
 }
 
 /**
@@ -128,9 +128,9 @@ export async function fuzzyMatchUserProducts(description, userId) {
 
     const normalizedInput = normalizeProductKey(description);
 
-    // Find best match using substring matching
+    // Find best match using word-level matching (order-independent)
     for (const product of data) {
-      // Check if input contains product key or vice versa
+      // First try exact substring match (faster, preserves existing behavior)
       if (normalizedInput.includes(product.product_key) ||
           product.product_key.includes(normalizedInput)) {
         try {
@@ -138,7 +138,41 @@ export async function fuzzyMatchUserProducts(description, userId) {
             input: description,
             matched_product: product.product_name,
             event_type: product.event_type,
-            times_logged: product.times_logged
+            times_logged: product.times_logged,
+            match_type: 'substring'
+          }, userId);
+        } catch (logErr) {
+          // Don't let logging errors break the main flow
+        }
+
+        return {
+          event_type: product.event_type,
+          product_name: product.product_name,
+          brand: product.brand,
+          times_logged: product.times_logged,
+          source: 'user_registry_fuzzy'
+        };
+      }
+
+      // Fall back to word-level matching (order-independent)
+      const inputWords = normalizedInput.split(' ').filter(w => w.length > 0);
+      const productWords = product.product_key.split(' ').filter(w => w.length > 0);
+
+      // Check if all input words exist in product_key (any order)
+      const allWordsMatch = inputWords.every(inputWord =>
+        productWords.some(productWord =>
+          productWord.includes(inputWord) || inputWord.includes(productWord)
+        )
+      );
+
+      if (allWordsMatch && inputWords.length > 0) {
+        try {
+          await Logger.info('registry', 'Found fuzzy match in user product registry', {
+            input: description,
+            matched_product: product.product_name,
+            event_type: product.event_type,
+            times_logged: product.times_logged,
+            match_type: 'word_level'
           }, userId);
         } catch (logErr) {
           // Don't let logging errors break the main flow

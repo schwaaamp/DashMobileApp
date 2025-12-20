@@ -106,26 +106,40 @@ async function log(level, category, message, metadata = {}, userId = null) {
   try {
     // Fire and forget - don't await to avoid blocking
     const insertResult = supabase.from('app_logs').insert(logEntry);
-    insertResult.then((result) => {
-      const { error } = result || {};
-      if (error && __DEV__) {
-        console.error('Failed to store log:', error);
-      }
-    });
+
+    // insertResult might be undefined if Supabase client is misconfigured
+    if (insertResult && typeof insertResult.then === 'function') {
+      insertResult.then((result) => {
+        const { error } = result || {};
+        if (error && __DEV__) {
+          console.error('Failed to store log:', error);
+        }
+      }).catch((err) => {
+        // Catch promise rejection
+        if (__DEV__) {
+          console.error('Failed to store log (promise rejected):', err);
+        }
+      });
+    } else if (__DEV__) {
+      console.warn('Logger: Supabase insert did not return a Promise');
+    }
   } catch (error) {
     // Fallback: log to console if Supabase fails
     if (__DEV__) {
       console.error('Failed to store log:', error);
     }
   }
+
+  // Return a resolved promise so callers can await without blocking
+  return Promise.resolve();
 }
 
 // Convenience methods
 export const Logger = {
-  debug: (category, message, metadata, userId) => log(LOG_LEVELS.DEBUG, category, message, metadata, userId),
-  info: (category, message, metadata, userId) => log(LOG_LEVELS.INFO, category, message, metadata, userId),
-  warn: (category, message, metadata, userId) => log(LOG_LEVELS.WARN, category, message, metadata, userId),
-  error: (category, message, metadata, userId) => log(LOG_LEVELS.ERROR, category, message, metadata, userId),
+  debug: async (category, message, metadata, userId) => await log(LOG_LEVELS.DEBUG, category, message, metadata, userId),
+  info: async (category, message, metadata, userId) => await log(LOG_LEVELS.INFO, category, message, metadata, userId),
+  warn: async (category, message, metadata, userId) => await log(LOG_LEVELS.WARN, category, message, metadata, userId),
+  error: async (category, message, metadata, userId) => await log(LOG_LEVELS.ERROR, category, message, metadata, userId),
 
   /**
    * Track API calls with timing and response info
