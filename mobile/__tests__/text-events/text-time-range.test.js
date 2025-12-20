@@ -8,6 +8,7 @@
 
 import { processTextInput } from '@/utils/voiceEventParser';
 import { supabase } from '@/utils/supabaseClient';
+import { createSupabaseMock } from '../__mocks__/supabaseMock';
 
 // Mock dependencies
 jest.mock('@/utils/supabaseClient');
@@ -22,27 +23,8 @@ describe('Text Time Range Parsing - Sauna', () => {
   beforeEach(() => {
     jest.clearAllMocks();
 
-    // Mock Supabase client methods
-    supabase.from = jest.fn(() => ({
-      select: jest.fn(() => ({
-        eq: jest.fn(() => ({
-          order: jest.fn(() => ({
-            limit: jest.fn(() => Promise.resolve({ data: [], error: null }))
-          }))
-        }))
-      })),
-      insert: jest.fn(() => ({
-        select: jest.fn(() => ({
-          single: jest.fn(() => Promise.resolve({
-            data: { id: mockAuditId },
-            error: null
-          }))
-        }))
-      })),
-      update: jest.fn(() => ({
-        eq: jest.fn(() => Promise.resolve({ error: null }))
-      }))
-    }));
+    // Use shared Supabase mock helper
+    supabase.from = createSupabaseMock({ auditId: mockAuditId });
   });
 
   it('should parse "sauna 2-2:25pm" as a time range with 25 minute duration', async () => {
@@ -74,71 +56,8 @@ describe('Text Time Range Parsing - Sauna', () => {
       return Promise.reject(new Error('Unexpected fetch URL'));
     });
 
-    // Mock voice_events insert to capture the created event
-    const mockVoiceEventInsert = jest.fn(() => ({
-      select: jest.fn(() => ({
-        single: jest.fn(() => {
-          const now = new Date();
-          const eventTime = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 14, 0, 0);
-
-          return Promise.resolve({
-            data: {
-              id: mockVoiceEventId,
-              user_id: mockUserId,
-              event_type: 'sauna',
-              event_data: {
-                duration: '25',
-                temperature: null,
-                temperature_units: null
-              },
-              event_time: eventTime.toISOString(),
-              source_record_id: mockAuditId,
-              capture_method: 'manual'
-            },
-            error: null
-          });
-        })
-      }))
-    }));
-
-    supabase.from = jest.fn((table) => {
-      if (table === 'voice_events') {
-        return {
-          select: jest.fn(() => ({
-            eq: jest.fn(() => ({
-              order: jest.fn(() => ({
-                limit: jest.fn(() => Promise.resolve({ data: [], error: null }))
-              }))
-            }))
-          })),
-          insert: mockVoiceEventInsert
-        };
-      }
-      if (table === 'voice_records_audit') {
-        return {
-          insert: jest.fn(() => ({
-            select: jest.fn(() => ({
-              single: jest.fn(() => Promise.resolve({
-                data: { id: mockAuditId },
-                error: null
-              }))
-            }))
-          })),
-          update: jest.fn(() => ({
-            eq: jest.fn(() => Promise.resolve({ error: null }))
-          }))
-        };
-      }
-      return {
-        select: jest.fn(() => ({
-          eq: jest.fn(() => ({
-            order: jest.fn(() => ({
-              limit: jest.fn(() => Promise.resolve({ data: [], error: null }))
-            }))
-          }))
-        }))
-      };
-    });
+    // Use shared mock
+    supabase.from = createSupabaseMock({ auditId: mockAuditId });
 
     const result = await processTextInput(
       testInput,
@@ -200,65 +119,8 @@ describe('Text Time Range Parsing - Sauna', () => {
       return Promise.reject(new Error('Unexpected fetch URL'));
     });
 
-    const mockVoiceEventInsert = jest.fn(() => ({
-      select: jest.fn(() => ({
-        single: jest.fn(() => Promise.resolve({
-          data: {
-            id: mockVoiceEventId,
-            user_id: mockUserId,
-            event_type: 'sauna',
-            event_data: {
-              duration: '25',
-              temperature: null,
-              temperature_units: null
-            },
-            event_time: expectedEventTime.toISOString(),
-            source_record_id: mockAuditId,
-            capture_method: 'manual'
-          },
-          error: null
-        }))
-      }))
-    }));
-
-    supabase.from = jest.fn((table) => {
-      if (table === 'voice_events') {
-        return {
-          select: jest.fn(() => ({
-            eq: jest.fn(() => ({
-              order: jest.fn(() => ({
-                limit: jest.fn(() => Promise.resolve({ data: [], error: null }))
-              }))
-            }))
-          })),
-          insert: mockVoiceEventInsert
-        };
-      }
-      if (table === 'voice_records_audit') {
-        return {
-          insert: jest.fn(() => ({
-            select: jest.fn(() => ({
-              single: jest.fn(() => Promise.resolve({
-                data: { id: mockAuditId },
-                error: null
-              }))
-            }))
-          })),
-          update: jest.fn(() => ({
-            eq: jest.fn(() => Promise.resolve({ error: null }))
-          }))
-        };
-      }
-      return {
-        select: jest.fn(() => ({
-          eq: jest.fn(() => ({
-            order: jest.fn(() => ({
-              limit: jest.fn(() => Promise.resolve({ data: [], error: null }))
-            }))
-          }))
-        }))
-      };
-    });
+    // Use shared mock
+    supabase.from = createSupabaseMock({ auditId: mockAuditId });
 
     const result = await processTextInput(
       testInput,

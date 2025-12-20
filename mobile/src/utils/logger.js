@@ -105,7 +105,9 @@ async function log(level, category, message, metadata = {}, userId = null) {
   // Store in Supabase (async, don't block execution)
   try {
     // Fire and forget - don't await to avoid blocking
-    supabase.from('app_logs').insert(logEntry).then(({ error }) => {
+    const insertResult = supabase.from('app_logs').insert(logEntry);
+    insertResult.then((result) => {
+      const { error } = result || {};
       if (error && __DEV__) {
         console.error('Failed to store log:', error);
       }

@@ -1,6 +1,7 @@
 import { supabase } from './supabaseClient';
 import { searchAllProducts, shouldSearchProducts } from './productSearch';
 import { Logger } from './logger';
+import { checkUserProductRegistry, fuzzyMatchUserProducts, updateUserProductRegistry } from './productRegistry';
 
 /**
  * Fetch user's recent events for context
@@ -56,6 +57,115 @@ function extractFrequentItems(history) {
     .sort((a, b) => b[1] - a[1])
     .slice(0, 20)
     .map(([item, count]) => ({ item, count }));
+}
+
+/**
+ * Reclassify food items that are actually supplements
+ * This handles cases where Claude incorrectly classifies electrolyte drinks,
+ * protein powders, and other supplements as food
+ *
+ * @param {string} description - The food description from Claude
+ * @returns {object|null} - Supplement data if reclassified, null otherwise
+ */
+function reclassifyFoodToSupplement(description) {
+  if (!description) return null;
+
+  const lowerDesc = description.toLowerCase();
+
+  // Known supplement brands (electrolyte drinks)
+  const electrolyteBrands = [
+    { pattern: /\blmnt\b/i, name: 'LMNT', defaultDosage: '1 pack', units: 'pack' },
+    { pattern: /\belement\b/i, name: 'LMNT', defaultDosage: '1 pack', units: 'pack' },
+    { pattern: /\bnuun\b/i, name: 'Nuun', defaultDosage: '1 tablet', units: 'tablet' },
+    { pattern: /\bliquid iv\b/i, name: 'Liquid IV', defaultDosage: '1 packet', units: 'packet' },
+    { pattern: /\bdrip drop\b/i, name: 'DripDrop', defaultDosage: '1 packet', units: 'packet' },
+  ];
+
+  // Check for electrolyte brands
+  for (const brand of electrolyteBrands) {
+    if (brand.pattern.test(lowerDesc)) {
+      // Extract flavor if present
+      const flavorMatch = lowerDesc.match(/(citrus|lemonade|orange|raspberry|watermelon|mango|chocolate|vanilla|strawberry)/i);
+      const flavor = flavorMatch ? ` ${flavorMatch[1].charAt(0).toUpperCase()}${flavorMatch[1].slice(1)}` : '';
+
+      return {
+        name: `${brand.name}${flavor}`,
+        dosage: brand.defaultDosage,
+        units: brand.units
+      };
+    }
+  }
+
+  // Protein powder patterns
+  if (/\bprotein\s+(powder|shake)\b/i.test(lowerDesc) || /\bwhey\b/i.test(lowerDesc)) {
+    return {
+      name: description,
+      dosage: '1 scoop',
+      units: 'scoop'
+    };
+  }
+
+  // Creatine
+  if (/\bcreatine\b/i.test(lowerDesc)) {
+    return {
+      name: 'Creatine',
+      dosage: '5g',
+      units: 'g'
+    };
+  }
+
+  // Pre-workout supplements
+  if (/\bpre-?workout\b/i.test(lowerDesc)) {
+    return {
+      name: description,
+      dosage: '1 scoop',
+      units: 'scoop'
+    };
+  }
+
+  // Amino acids
+  if (/\b(bcaa|amino acid|eaa)\b/i.test(lowerDesc)) {
+    return {
+      name: description,
+      dosage: '1 scoop',
+      units: 'scoop'
+    };
+  }
+
+  return null;
+}
+
+/**
+ * Score how likely a description is a supplement vs food
+ * Returns 0-1 score (1 = definitely supplement)
+ * Uses semantic patterns instead of hard-coded brands
+ */
+function scoreSupplementLikelihood(description) {
+  if (!description) return 0;
+
+  const lowerDesc = description.toLowerCase();
+
+  const indicators = {
+    // Supplement-specific keywords
+    keywords: /\b(electrolyte|protein|vitamin|mineral|creatine|bcaa|amino|omega|probiotic|collagen|magnesium|calcium|zinc|iron|potassium|sodium)\b/i,
+
+    // Dosage indicators (mg, IU, etc.)
+    dosage: /\b\d+\s*(mg|mcg|iu|g|pack|scoop|tablets?|capsules?|softgels?|gumm(?:y|ies))\b/i,
+
+    // Form factors typical of supplements (handle singular and plural)
+    formFactor: /\b(powder|shake|drink\s*mix|capsules?|tablets?|softgels?|gumm(?:y|ies)|supplement)\b/i,
+
+    // Supplement categories
+    categories: /\b(pre-?workout|post-?workout|sports\s*nutrition|multivitamin|nootropic)\b/i
+  };
+
+  let score = 0;
+  if (indicators.keywords.test(lowerDesc)) score += 0.5;
+  if (indicators.dosage.test(lowerDesc)) score += 0.3;
+  if (indicators.formFactor.test(lowerDesc)) score += 0.2;
+  if (indicators.categories.test(lowerDesc)) score += 0.4;
+
+  return Math.min(score, 1.0);
 }
 
 // Event type schemas for validation
@@ -128,20 +238,40 @@ Event type schemas:
 ${JSON.stringify(EVENT_TYPES, null, 2)}
 ${userContextSection}
 
+Event Type Classification Guidelines:
+- SUPPLEMENT: Vitamins, minerals, electrolyte drinks (LMNT, Nuun, Liquid IV), protein powders, creatine, herbal supplements, amino acids, pre-workout, nootropics
+- MEDICATION: Prescription drugs, over-the-counter medicines (aspirin, ibuprofen, etc.)
+- FOOD: Prepared meals, whole foods, snacks, beverages (but NOT electrolyte supplements)
+
+CRITICAL Classification Rules:
+1. Electrolyte drinks/powders (LMNT, Nuun, Liquid IV, etc.) are SUPPLEMENTS, not food
+2. Protein powders, creatine, amino acids are SUPPLEMENTS, not food
+3. Even if something is drinkable or edible, classify by PRIMARY PURPOSE:
+   - Primary purpose = nutrition/sustenance → food
+   - Primary purpose = supplementation/performance → supplement
+4. When uncertain between food and supplement, if it has a brand name commonly associated with supplements → classify as supplement
+
 Rules:
-1. Always identify the most appropriate event_type
+1. Always identify the most appropriate event_type using the classification guidelines above
 2. Extract all available information
 3. Use reasonable defaults for units (mg/dL for glucose, units for insulin, etc.)
 4. For food, try to extract nutritional info if mentioned
 5. For timestamps, interpret relative times ("30 min jog" = started 30 min ago)
 6. CRITICAL: Match input against user's frequent items for better accuracy (e.g., "element" → "LMNT")
+7. CRITICAL: Apply event type classification guidelines - electrolyte drinks are supplements, not food
 
 Example inputs and outputs:
 Input: "Log 6 units of basal insulin"
-Output: {"event_type": "insulin", "event_data": {"value": 6, "units": "units", "insulin_type": "basal"}, "event_time": "2024-01-01T12:00:00Z"}
+Output: {"event_type": "insulin", "event_data": {"value": 6, "units": "units", "insulin_type": "basal"}, "event_time": "2024-01-01T12:00:00Z", "confidence": 95}
 
 Input: "Ate large chicken thigh with broccoli"
-Output: {"event_type": "food", "event_data": {"description": "large chicken thigh with broccoli", "protein": 45, "carbs": 8}, "event_time": "2024-01-01T12:00:00Z"}`;
+Output: {"event_type": "food", "event_data": {"description": "large chicken thigh with broccoli", "protein": 45, "carbs": 8}, "event_time": "2024-01-01T12:00:00Z", "confidence": 85}
+
+Input: "element citrus"
+Output: {"event_type": "supplement", "event_data": {"name": "LMNT Citrus Salt", "dosage": "1 pack", "units": "pack"}, "event_time": "2024-01-01T12:00:00Z", "confidence": 90}
+
+Input: "NOW Vitamin D"
+Output: {"event_type": "supplement", "event_data": {"name": "NOW Vitamin D 5000 IU", "dosage": "5000", "units": "IU"}, "event_time": "2024-01-01T12:00:00Z", "confidence": 92}`;
 
   try {
     const requestBody = {
@@ -233,6 +363,45 @@ Output: {"event_type": "food", "event_data": {"description": "large chicken thig
         error_stack: jsonError.stack
       }, userId);
       throw jsonError;
+    }
+
+    // Post-processing: Reclassify food items that are actually supplements
+    // This handles cases where Claude incorrectly classifies electrolyte drinks as food
+    if (parsed.event_type === 'food' && parsed.event_data?.description) {
+      const reclassified = reclassifyFoodToSupplement(parsed.event_data.description);
+      if (reclassified) {
+        await Logger.info('parsing', 'Reclassified food as supplement (pattern match)', {
+          original_description: parsed.event_data.description,
+          original_type: 'food',
+          new_type: 'supplement',
+          reclassified_name: reclassified.name
+        }, userId);
+
+        parsed.event_type = 'supplement';
+        parsed.event_data = {
+          name: reclassified.name,
+          dosage: reclassified.dosage || parsed.event_data.serving_size || '1 serving',
+          units: reclassified.units || 'serving'
+        };
+      } else {
+        // If pattern-based reclassification didn't match, try semantic scoring
+        const supplementScore = scoreSupplementLikelihood(parsed.event_data.description);
+        if (supplementScore >= 0.7) {
+          await Logger.info('parsing', 'Reclassified food as supplement (semantic scoring)', {
+            original_description: parsed.event_data.description,
+            original_type: 'food',
+            new_type: 'supplement',
+            supplement_score: supplementScore
+          }, userId);
+
+          parsed.event_type = 'supplement';
+          parsed.event_data = {
+            name: parsed.event_data.description,
+            dosage: parsed.event_data.serving_size || '1 serving',
+            units: 'serving'
+          };
+        }
+      }
     }
 
     // Validate the response has required fields
@@ -328,7 +497,7 @@ export async function createAuditRecord(userId, rawText, eventType, value, units
     hasUnits: units !== null
   }, userId);
 
-  const { data, error } = await supabase
+  const result = await supabase
     .from('voice_records_audit')
     .insert({
       user_id: userId,
@@ -342,6 +511,8 @@ export async function createAuditRecord(userId, rawText, eventType, value, units
     })
     .select()
     .single();
+
+  const { data, error } = result || {};
 
   if (error) {
     console.error('Error creating audit record:', error);
@@ -368,10 +539,12 @@ export async function createAuditRecord(userId, rawText, eventType, value, units
  * Update audit record status
  */
 export async function updateAuditStatus(auditId, status) {
-  const { error } = await supabase
+  const result = await supabase
     .from('voice_records_audit')
     .update({ nlp_status: status })
     .eq('id', auditId);
+
+  const { error } = result || {};
 
   if (error) {
     console.error('Error updating audit status:', error);
@@ -383,7 +556,7 @@ export async function updateAuditStatus(auditId, status) {
  * Insert event into voice_events table
  */
 export async function createVoiceEvent(userId, eventType, eventData, eventTime, sourceRecordId, captureMethod = 'manual') {
-  const { data, error } = await supabase
+  const result = await supabase
     .from('voice_events')
     .insert({
       user_id: userId,
@@ -396,9 +569,27 @@ export async function createVoiceEvent(userId, eventType, eventData, eventTime, 
     .select()
     .single();
 
+  const { data, error } = result || {};
+
   if (error) {
     console.error('Error creating voice event:', error);
     throw new Error('Failed to create voice event');
+  }
+
+  // Phase 2: Update user product registry after successful event creation
+  // This builds the self-learning classification system
+  if (['food', 'supplement', 'medication'].includes(eventType)) {
+    const productName = eventData.description || eventData.name;
+    const brand = eventData.brand || null;
+
+    if (productName) {
+      // Fire and forget - don't block on registry update
+      updateUserProductRegistry(userId, eventType, productName, brand)
+        .catch(err => {
+          console.error('Error updating product registry:', err);
+          // Don't throw - registry update is not critical
+        });
+    }
   }
 
   return data;
@@ -421,6 +612,138 @@ export async function processTextInput(text, userId, apiKey, captureMethod = 'ma
     console.log('Fetching user history for context...');
     const userHistory = await getUserRecentEvents(userId, 50);
     console.log(`Found ${userHistory.length} recent events`);
+
+    // Step 1.5: Check user's product registry FIRST (Phase 2 - Self-Learning)
+    // This bypasses AI parsing for products the user has confirmed multiple times
+    const registryMatch = await checkUserProductRegistry(text, userId);
+    if (registryMatch) {
+      console.log(`Found exact match in user product registry: ${registryMatch.product_name} (${registryMatch.times_logged} times)`);
+
+      // Create audit record for registry match
+      const claudeModel = 'claude-3-opus-20240229';
+      const registryMetadata = {
+        capture_method: captureMethod,
+        user_history_count: userHistory.length,
+        claude_model: 'registry_bypass', // Indicate we bypassed AI
+        registry_match: {
+          source: registryMatch.source,
+          times_logged: registryMatch.times_logged,
+          product_name: registryMatch.product_name
+        },
+        confidence: 95 // High confidence from user history
+      };
+
+      if (transcriptionMetadata) {
+        registryMetadata.transcription = transcriptionMetadata;
+      }
+
+      const auditRecord = await createAuditRecord(
+        userId,
+        text,
+        registryMatch.event_type,
+        null,
+        null,
+        claudeModel,
+        registryMetadata
+      );
+
+      // Create event data based on type
+      const eventData = registryMatch.event_type === 'food'
+        ? { description: registryMatch.product_name }
+        : { name: registryMatch.product_name, dosage: '1 serving', units: 'serving' };
+
+      // Create voice event directly
+      const voiceEvent = await createVoiceEvent(
+        userId,
+        registryMatch.event_type,
+        eventData,
+        new Date().toISOString(),
+        auditRecord.id,
+        captureMethod
+      );
+
+      // Update audit status
+      await updateAuditStatus(auditRecord.id, 'awaiting_user_clarification_success');
+
+      return {
+        success: true,
+        complete: true,
+        event: voiceEvent,
+        auditId: auditRecord.id,
+        confidence: 95,
+        parsed: {
+          event_type: registryMatch.event_type,
+          event_data: eventData,
+          confidence: 95
+        },
+        productOptions: null, // No search needed
+        source: 'user_registry'
+      };
+    }
+
+    // Step 1.6: Try fuzzy match if no exact match
+    const fuzzyMatch = await fuzzyMatchUserProducts(text, userId);
+    if (fuzzyMatch) {
+      console.log(`Found fuzzy match in user product registry: ${fuzzyMatch.product_name} (${fuzzyMatch.times_logged} times)`);
+
+      // Treat fuzzy matches same as exact matches - bypass AI entirely
+      const claudeModel = 'claude-3-opus-20240229';
+      const registryMetadata = {
+        capture_method: captureMethod,
+        user_history_count: userHistory.length,
+        claude_model: 'registry_fuzzy_bypass',
+        registry_match: {
+          source: fuzzyMatch.source,
+          times_logged: fuzzyMatch.times_logged,
+          product_name: fuzzyMatch.product_name
+        },
+        confidence: 95
+      };
+
+      if (transcriptionMetadata) {
+        registryMetadata.transcription = transcriptionMetadata;
+      }
+
+      const auditRecord = await createAuditRecord(
+        userId,
+        text,
+        fuzzyMatch.event_type,
+        null,
+        null,
+        claudeModel,
+        registryMetadata
+      );
+
+      const eventData = fuzzyMatch.event_type === 'food'
+        ? { description: fuzzyMatch.product_name }
+        : { name: fuzzyMatch.product_name, dosage: '1 serving', units: 'serving' };
+
+      const voiceEvent = await createVoiceEvent(
+        userId,
+        fuzzyMatch.event_type,
+        eventData,
+        new Date().toISOString(),
+        auditRecord.id,
+        captureMethod
+      );
+
+      await updateAuditStatus(auditRecord.id, 'awaiting_user_clarification_success');
+
+      return {
+        success: true,
+        complete: true,
+        event: voiceEvent,
+        auditId: auditRecord.id,
+        confidence: 95,
+        parsed: {
+          event_type: fuzzyMatch.event_type,
+          event_data: eventData,
+          confidence: 95
+        },
+        productOptions: null,
+        source: 'user_registry'
+      };
+    }
 
     // Step 2: Create initial audit record
     const claudeModel = 'claude-3-opus-20240229';
@@ -495,9 +818,68 @@ export async function processTextInput(text, userId, apiKey, captureMethod = 'ma
           top_results: productOptions.slice(0, 3).map(p => ({
             name: p.name,
             brand: p.brand,
-            confidence: p.confidence
+            confidence: p.confidence,
+            database_category: p.database_category
           }))
         }, userId);
+
+        // Phase 3: Database category override
+        // If top product has high confidence and database knows its category,
+        // trust the database over AI classification
+        if (productOptions.length > 0) {
+          const topProduct = productOptions[0];
+          if (topProduct.confidence > 80 && topProduct.database_category) {
+            // Database says it's a supplement, but AI said food?
+            if (topProduct.database_category !== parsed.event_type) {
+              await Logger.info('parsing', 'Database category override', {
+                ai_classified_as: parsed.event_type,
+                database_says: topProduct.database_category,
+                product_name: topProduct.name,
+                product_confidence: topProduct.confidence,
+                brand: topProduct.brand
+              }, userId);
+
+              console.log(`Database override: changing ${parsed.event_type} -> ${topProduct.database_category}`);
+
+              // Override AI classification with database category
+              const originalEventType = parsed.event_type;
+              parsed.event_type = topProduct.database_category;
+
+              // Update event_data structure to match new type
+              if (parsed.event_type === 'supplement' && parsed.event_data.description) {
+                parsed.event_data = {
+                  name: parsed.event_data.description,
+                  dosage: parsed.event_data.serving_size || '1 serving',
+                  units: 'serving',
+                  brand: topProduct.brand
+                };
+              } else if (parsed.event_type === 'food' && parsed.event_data.name) {
+                parsed.event_data = {
+                  description: parsed.event_data.name,
+                  ...(parsed.event_data.dosage && { serving_size: parsed.event_data.dosage })
+                };
+              }
+
+              // Update audit record with override info
+              await supabase
+                .from('voice_records_audit')
+                .update({
+                  record_type: parsed.event_type,
+                  nlp_metadata: {
+                    ...updatedMetadata,
+                    database_override: {
+                      original_type: originalEventType,
+                      override_type: parsed.event_type,
+                      override_source: 'database_category',
+                      product_id: topProduct.id,
+                      product_source: topProduct.source
+                    }
+                  }
+                })
+                .eq('id', auditRecord.id);
+            }
+          }
+        }
       } else {
         console.log('Skipping product search - confidence is high enough');
       }
@@ -527,7 +909,9 @@ export async function processTextInput(text, userId, apiKey, captureMethod = 'ma
           complete: true,
           event: voiceEvent,
           auditId: auditRecord.id,
-          confidence
+          confidence,
+          parsed,  // Include parsed data for test verification
+          productOptions  // Include product options (may be null or empty array) for test verification
         };
       } else {
         // Step 6b: Show confirmation screen for incomplete entries or food/supplement/medication

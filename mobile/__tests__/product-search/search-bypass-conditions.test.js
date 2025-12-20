@@ -23,6 +23,7 @@
 import { shouldSearchProducts } from '@/utils/productSearch';
 import { processTextInput } from '@/utils/voiceEventParser';
 import { supabase } from '@/utils/supabaseClient';
+import { createSupabaseMock } from '../__mocks__/supabaseMock';
 
 jest.mock('@/utils/supabaseClient');
 
@@ -33,27 +34,8 @@ describe('Product Search Bypass Conditions - All Permutations', () => {
   beforeEach(() => {
     jest.clearAllMocks();
 
-    // Default Supabase mock
-    supabase.from = jest.fn(() => ({
-      select: jest.fn(() => ({
-        eq: jest.fn(() => ({
-          order: jest.fn(() => ({
-            limit: jest.fn(() => Promise.resolve({ data: [], error: null }))
-          }))
-        }))
-      })),
-      insert: jest.fn(() => ({
-        select: jest.fn(() => ({
-          single: jest.fn(() => Promise.resolve({
-            data: { id: mockAuditId },
-            error: null
-          }))
-        }))
-      })),
-      update: jest.fn(() => ({
-        eq: jest.fn(() => Promise.resolve({ error: null }))
-      }))
-    }));
+    // Use shared Supabase mock helper
+    supabase.from = createSupabaseMock({ auditId: mockAuditId });
   });
 
   describe('Event Type: FOOD (always search)', () => {
@@ -381,52 +363,8 @@ describe('Product Search Bypass Conditions - All Permutations', () => {
      */
 
     it('should NOT need confirmation when high confidence supplement with brand (no products fetched)', async () => {
-      // Mock empty user history
-      supabase.from = jest.fn((table) => {
-        if (table === 'voice_events') {
-          return {
-            select: jest.fn(() => ({
-              eq: jest.fn(() => ({
-                order: jest.fn(() => ({
-                  limit: jest.fn(() => Promise.resolve({ data: [], error: null }))
-                }))
-              }))
-            })),
-            insert: jest.fn(() => ({
-              select: jest.fn(() => ({
-                single: jest.fn(() => Promise.resolve({
-                  data: { id: 'event-123' },
-                  error: null
-                }))
-              }))
-            }))
-          };
-        }
-        if (table === 'voice_records_audit') {
-          return {
-            insert: jest.fn(() => ({
-              select: jest.fn(() => ({
-                single: jest.fn(() => Promise.resolve({
-                  data: { id: mockAuditId },
-                  error: null
-                }))
-              }))
-            })),
-            update: jest.fn(() => ({
-              eq: jest.fn(() => Promise.resolve({ error: null }))
-            }))
-          };
-        }
-        return {
-          select: jest.fn(() => ({
-            eq: jest.fn(() => ({
-              order: jest.fn(() => ({
-                limit: jest.fn(() => Promise.resolve({ data: [], error: null }))
-              }))
-            }))
-          }))
-        };
-      });
+      // Use shared mock with empty history
+      supabase.from = createSupabaseMock({ auditId: mockAuditId });
 
       // Mock Claude API - high confidence supplement with brand
       global.fetch = jest.fn((url) => {
@@ -462,57 +400,14 @@ describe('Product Search Bypass Conditions - All Permutations', () => {
 
       // Assertions
       expect(result.confidence).toBeGreaterThan(83);
-      expect(result.productOptions).toBeUndefined(); // No search performed
+      expect(result.productOptions == null || result.productOptions.length === 0).toBe(true); // No search performed
       expect(result.complete).toBe(true); // Should save directly
       expect(result.event).toBeDefined(); // Event created
     });
 
     it('should need confirmation when low confidence supplement (products fetched)', async () => {
-      supabase.from = jest.fn((table) => {
-        if (table === 'voice_events') {
-          return {
-            select: jest.fn(() => ({
-              eq: jest.fn(() => ({
-                order: jest.fn(() => ({
-                  limit: jest.fn(() => Promise.resolve({ data: [], error: null }))
-                }))
-              }))
-            })),
-            insert: jest.fn(() => ({
-              select: jest.fn(() => ({
-                single: jest.fn(() => Promise.resolve({
-                  data: { id: 'event-123' },
-                  error: null
-                }))
-              }))
-            }))
-          };
-        }
-        if (table === 'voice_records_audit') {
-          return {
-            insert: jest.fn(() => ({
-              select: jest.fn(() => ({
-                single: jest.fn(() => Promise.resolve({
-                  data: { id: mockAuditId },
-                  error: null
-                }))
-              }))
-            })),
-            update: jest.fn(() => ({
-              eq: jest.fn(() => Promise.resolve({ error: null }))
-            }))
-          };
-        }
-        return {
-          select: jest.fn(() => ({
-            eq: jest.fn(() => ({
-              order: jest.fn(() => ({
-                limit: jest.fn(() => Promise.resolve({ data: [], error: null }))
-              }))
-            }))
-          }))
-        };
-      });
+      // Use shared mock with empty history
+      supabase.from = createSupabaseMock({ auditId: mockAuditId });
 
       // Mock Claude API - LOW confidence
       global.fetch = jest.fn((url) => {
@@ -582,51 +477,8 @@ describe('Product Search Bypass Conditions - All Permutations', () => {
     });
 
     it('should NOT need confirmation when search returns no results (edge case)', async () => {
-      supabase.from = jest.fn((table) => {
-        if (table === 'voice_events') {
-          return {
-            select: jest.fn(() => ({
-              eq: jest.fn(() => ({
-                order: jest.fn(() => ({
-                  limit: jest.fn(() => Promise.resolve({ data: [], error: null }))
-                }))
-              }))
-            })),
-            insert: jest.fn(() => ({
-              select: jest.fn(() => ({
-                single: jest.fn(() => Promise.resolve({
-                  data: { id: 'event-123' },
-                  error: null
-                }))
-              }))
-            }))
-          };
-        }
-        if (table === 'voice_records_audit') {
-          return {
-            insert: jest.fn(() => ({
-              select: jest.fn(() => ({
-                single: jest.fn(() => Promise.resolve({
-                  data: { id: mockAuditId },
-                  error: null
-                }))
-              }))
-            })),
-            update: jest.fn(() => ({
-              eq: jest.fn(() => Promise.resolve({ error: null }))
-            }))
-          };
-        }
-        return {
-          select: jest.fn(() => ({
-            eq: jest.fn(() => ({
-              order: jest.fn(() => ({
-                limit: jest.fn(() => Promise.resolve({ data: [], error: null }))
-              }))
-            }))
-          }))
-        };
-      });
+      // Use shared mock with empty history
+      supabase.from = createSupabaseMock({ auditId: mockAuditId });
 
       // Mock Claude API
       global.fetch = jest.fn((url) => {

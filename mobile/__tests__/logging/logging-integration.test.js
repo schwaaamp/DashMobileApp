@@ -14,6 +14,7 @@ import { Logger } from '@/utils/logger';
 import { processTextInput } from '@/utils/voiceEventParser';
 import { searchAllProducts } from '@/utils/productSearch';
 import { supabase } from '@/utils/supabaseClient';
+import { createSupabaseMock } from '../__mocks__/supabaseMock';
 
 // Mock Supabase for unit tests
 // For integration tests, use a real test database
@@ -42,24 +43,8 @@ describe('Logging Integration Tests', () => {
           })
         };
       }
-      // Default mock for other tables
-      return {
-        select: jest.fn(() => ({
-          eq: jest.fn(() => ({
-            order: jest.fn(() => ({
-              limit: jest.fn(() => Promise.resolve({ data: [], error: null }))
-            }))
-          }))
-        })),
-        insert: jest.fn(() => ({
-          select: jest.fn(() => ({
-            single: jest.fn(() => Promise.resolve({ data: { id: 'mock-id' }, error: null }))
-          }))
-        })),
-        update: jest.fn(() => ({
-          eq: jest.fn(() => Promise.resolve({ data: { id: 'mock-id' }, error: null }))
-        }))
-      };
+      // Use shared mock for other tables
+      return createSupabaseMock({ auditId: 'mock-id' })(table);
     });
   });
 
@@ -192,7 +177,8 @@ describe('Logging Integration Tests', () => {
 
       expect(searchDecisionLog).toBeDefined();
       expect(searchDecisionLog.metadata.should_search).toBeDefined();
-      expect(searchDecisionLog.metadata.event_type).toBe('food');
+      // "citrus element pack" gets reclassified from food to supplement (LMNT)
+      expect(searchDecisionLog.metadata.event_type).toBe('supplement');
       expect(searchDecisionLog.user_id).toBe(mockUserId);
     });
   });

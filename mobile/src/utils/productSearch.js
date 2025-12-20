@@ -18,6 +18,86 @@ const KNOWN_BRANDS = [
 ];
 
 /**
+ * Phase 3: Extract product category from database metadata
+ * Uses Open Food Facts categories to determine if product is supplement or food
+ * This is more reliable than AI classification
+ *
+ * @param {Object} product - Raw product data from API
+ * @param {string} source - Data source ('openfoodfacts' or 'usda')
+ * @returns {string|null} - 'supplement', 'food', or null if unknown
+ */
+function extractProductCategory(product, source) {
+  if (!product) return null;
+
+  if (source === 'openfoodfacts') {
+    // Open Food Facts uses categories_tags array
+    const categories = product.categories_tags || [];
+    const categoriesLower = categories.map(cat => cat.toLowerCase());
+
+    // Supplement indicators in Open Food Facts categories
+    const supplementIndicators = [
+      'supplement',
+      'dietary-supplement',
+      'food-supplement',
+      'vitamin',
+      'mineral',
+      'protein-powder',
+      'sports-nutrition',
+      'amino-acid',
+      'omega-3',
+      'probiotic',
+      'electrolyte',
+      'creatine',
+      'pre-workout',
+      'post-workout'
+    ];
+
+    // Check if any category tag contains supplement indicators
+    for (const cat of categoriesLower) {
+      for (const indicator of supplementIndicators) {
+        if (cat.includes(indicator)) {
+          return 'supplement';
+        }
+      }
+    }
+
+    // Food indicators (to distinguish from supplements)
+    const foodIndicators = [
+      'beverage',
+      'snack',
+      'meal',
+      'prepared-food',
+      'fruit',
+      'vegetable',
+      'meat',
+      'dairy',
+      'grain',
+      'bread',
+      'cereal',
+      'dessert'
+    ];
+
+    for (const cat of categoriesLower) {
+      for (const indicator of foodIndicators) {
+        if (cat.includes(indicator)) {
+          return 'food';
+        }
+      }
+    }
+  }
+
+  // USDA categorization (if needed in future)
+  if (source === 'usda') {
+    // USDA doesn't have explicit supplement categories
+    // Most USDA entries are whole foods
+    return 'food';
+  }
+
+  // Unknown - let AI classification decide
+  return null;
+}
+
+/**
  * Search Open Food Facts database (branded products, supplements)
  * Free API, no key required
  */
@@ -59,23 +139,31 @@ export async function searchOpenFoodFacts(query, limit = 10, userId = null) {
       return [];
     }
 
-    // Transform to our format
-    return data.products.map(product => ({
-      source: 'openfoodfacts',
-      id: product.code,
-      name: product.product_name || product.product_name_en,
-      brand: product.brands,
-      category: product.categories,
-      servingSize: product.serving_size,
-      nutrients: {
-        calories: product.nutriments?.['energy-kcal_100g'],
-        protein: product.nutriments?.proteins_100g,
-        carbs: product.nutriments?.carbohydrates_100g,
-        fat: product.nutriments?.fat_100g,
-      },
-      imageUrl: product.image_url,
-      confidence: calculateMatchConfidence(query, product.product_name || product.product_name_en, product.brands),
-    })).sort((a, b) => b.confidence - a.confidence);
+    // Transform to our format with database category extraction
+    return data.products.map(product => {
+      const productData = {
+        source: 'openfoodfacts',
+        id: product.code,
+        name: product.product_name || product.product_name_en,
+        brand: product.brands,
+        category: product.categories,
+        servingSize: product.serving_size,
+        nutrients: {
+          calories: product.nutriments?.['energy-kcal_100g'],
+          protein: product.nutriments?.proteins_100g,
+          carbs: product.nutriments?.carbohydrates_100g,
+          fat: product.nutriments?.fat_100g,
+        },
+        imageUrl: product.image_url,
+        confidence: calculateMatchConfidence(query, product.product_name || product.product_name_en, product.brands),
+        raw: product // Keep raw data for category extraction
+      };
+
+      // Phase 3: Extract database category (supplement vs food)
+      productData.database_category = extractProductCategory(product, 'openfoodfacts');
+
+      return productData;
+    }).sort((a, b) => b.confidence - a.confidence);
   } catch (error) {
     console.error('Error searching Open Food Facts:', error);
     await Logger.error('product_search', 'Open Food Facts search failed', {

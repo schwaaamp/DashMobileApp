@@ -8,6 +8,7 @@ import * as Haptics from 'expo-haptics';
 import { createVoiceEvent, updateAuditStatus } from '@/utils/voiceEventParser';
 import { calculateEventTime } from '@/utils/geminiParser';
 import useUser from '@/utils/auth/useUser';
+import { supabase } from '@/utils/supabaseClient';
 import {
   useFonts,
   Poppins_400Regular,
@@ -129,6 +130,41 @@ export default function ConfirmScreen() {
       }
 
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+
+      // Phase 4: Capture classification corrections
+      // If user selected a product and its event_type differs from AI classification, log it
+      if (selectedProduct && productOptions && productOptions.length > 0) {
+        // Determine the event_type of the selected product
+        const selectedProductEventType = selectedProduct.event_type ||
+                                          selectedProduct.database_category ||
+                                          parsedData.event_type;
+
+        // Check if user corrected AI's classification
+        if (selectedProductEventType !== parsedData.event_type) {
+          try {
+            // Get original user input from metadata
+            const userInput = metadata?.original_input || params.userInput || '';
+
+            // Log the classification correction
+            await supabase.from('classification_corrections').insert({
+              user_id: user.id,
+              user_input: userInput,
+              ai_event_type: parsedData.event_type,
+              ai_confidence: confidence,
+              corrected_event_type: selectedProductEventType,
+              selected_product_id: selectedProduct.id,
+              selected_product_name: selectedProduct.name,
+              selected_product_brand: selectedProduct.brand,
+              voice_record_audit_id: auditId
+            });
+
+            console.log(`Captured classification correction: ${parsedData.event_type} -> ${selectedProductEventType}`);
+          } catch (correctionError) {
+            // Don't block the flow if correction logging fails
+            console.error('Error logging classification correction:', correctionError);
+          }
+        }
+      }
 
       // Calculate actual event time from time_info
       const eventTime = calculateEventTime(parsedData.time_info);

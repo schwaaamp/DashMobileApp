@@ -18,7 +18,8 @@
       "Bash(tail:*)",
       "Bash(chmod:*)",
       "Bash(ls:*)",
-      "Bash(git push)"
+      "Bash(git push)",
+      "Bash(1)"
     ]
   }
 }
