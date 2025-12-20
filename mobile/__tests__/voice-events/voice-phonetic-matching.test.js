@@ -421,4 +421,98 @@ describe('Voice Phonetic Matching - LMNT', () => {
     expect(lmntProduct.name).toContain('LMNT');
     expect(lmntProduct.confidence).toBeGreaterThan(0);
   });
+
+  it('should match "citrus element" to "Citrus Salt - LMNT" in top 3 results', async () => {
+    // Test that "citrus element" phonetically matches to LMNT Citrus Salt
+    const query = 'citrus element';
+
+    // Mock Open Food Facts API to return LMNT Citrus Salt product
+    global.fetch = jest.fn((url) => {
+      if (url.includes('openfoodfacts.org')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({
+            products: [
+              {
+                code: 'lmnt-citrus-001',
+                product_name: 'Citrus Salt - LMNT',
+                brands: 'LMNT',
+                serving_size: '1 pack (6g)',
+                nutriments: {
+                  'energy-kcal_100g': 0,
+                  'sodium_100g': 1000,
+                  'potassium_100g': 200,
+                  'magnesium_100g': 60,
+                  proteins_100g: 0,
+                  carbohydrates_100g: 0,
+                  fat_100g: 0
+                }
+              },
+              {
+                code: 'lmnt-citrus-002',
+                product_name: 'LMNT Citrus Salt Electrolyte Drink Mix',
+                brands: 'LMNT',
+                serving_size: '1 pack',
+                nutriments: {
+                  'energy-kcal_100g': 0,
+                  'sodium_100g': 1000,
+                  proteins_100g: 0,
+                  carbohydrates_100g: 0,
+                  fat_100g: 0
+                }
+              },
+              {
+                code: 'generic-citrus-001',
+                product_name: 'Generic Citrus Powder',
+                brands: 'Generic Brand',
+                serving_size: '1 tsp',
+                nutriments: {
+                  'energy-kcal_100g': 50,
+                  proteins_100g: 0,
+                  carbohydrates_100g: 12,
+                  fat_100g: 0
+                }
+              }
+            ]
+          })
+        });
+      }
+      if (url.includes('api.nal.usda.gov')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ foods: [] })
+        });
+      }
+      return Promise.reject(new Error('Unexpected fetch URL'));
+    });
+
+    // Call searchAllProducts with "citrus element"
+    // The phonetic variation should transform "element" → "lmnt"
+    // Creating search variations like: "citrus lmnt", "ctrs element", "ctrs lmnt"
+    const results = await searchAllProducts(query, null);
+
+    // Verify results
+    expect(results.length).toBeGreaterThan(0);
+
+    // Get top 3 results
+    const top3 = results.slice(0, 3);
+
+    // Find LMNT Citrus Salt in top 3
+    const citrusLmntProduct = top3.find(p =>
+      p.brand === 'LMNT' &&
+      (p.name.includes('Citrus Salt') || p.name.includes('Citrus'))
+    );
+
+    expect(citrusLmntProduct).toBeDefined();
+    expect(citrusLmntProduct.brand).toBe('LMNT');
+    expect(citrusLmntProduct.name).toMatch(/Citrus.*LMNT|LMNT.*Citrus/i);
+    expect(citrusLmntProduct.confidence).toBeGreaterThan(0);
+
+    // Verify it's in top 3 results
+    const indexInResults = top3.findIndex(p => p === citrusLmntProduct);
+    expect(indexInResults).toBeGreaterThanOrEqual(0);
+    expect(indexInResults).toBeLessThan(3);
+  });
 });

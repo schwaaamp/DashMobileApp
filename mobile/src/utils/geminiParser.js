@@ -67,7 +67,7 @@ export async function parseAudioWithGemini(audioUri, apiKey, userHistory = []) {
     // Extract frequently logged items for context
     const frequentItems = extractFrequentItems(userHistory);
     const userContextSection = frequentItems.length > 0
-      ? `\n\nUSER'S FREQUENTLY LOGGED ITEMS (use these for better accuracy):\n${frequentItems.map(({ item, count }) => `- "${item}" (logged ${count}x)`).join('\n')}\n\nIMPORTANT: When parsing input, check if it matches any of the user's frequent items. For example:\n- "element lemonade" likely means "LMNT lemonade" if that's in their history\n- "chicken thigh" likely refers to their usual preparation if they log it often\n- Brand names and specific products should match their historical entries`
+      ? `\n\nUSER'S FREQUENTLY LOGGED ITEMS (use these for better accuracy):\n${frequentItems.map(({ item, count }) => `- "${item}" (logged ${count}x)`).join('\n')}\n\nIMPORTANT: When parsing input, check if it matches any of the user's frequent items. For example:\n- "element" likely refers to the "LMNT" brand if that's in their history\n- "chicken thigh" likely refers to their usual preparation if they log it often\n- Pay attention to flavor/variant keywords (citrus, lemonade, chocolate, vanilla, etc.) and match them accurately\n- Brand names and specific products should match their historical entries`
       : '';
 
     const systemPrompt = `You are an AI assistant for a health tracking and wellness app. Users log various health events throughout their day to monitor their health, manage conditions like diabetes, and track wellness activities.
@@ -268,7 +268,7 @@ export async function parseTextWithGemini(text, apiKey, userHistory = []) {
     // Extract frequently logged items
     const frequentItems = extractFrequentItems(userHistory);
     const userContextSection = frequentItems.length > 0
-      ? `\n\nUSER'S FREQUENTLY LOGGED ITEMS (use these for better accuracy):\n${frequentItems.map(({ item, count }) => `- "${item}" (logged ${count}x)`).join('\n')}\n\nIMPORTANT: When parsing input, check if it matches any of the user's frequent items. For example:\n- "element lemonade" likely means "LMNT lemonade" if that's in their history\n- "chicken thigh" likely refers to their usual preparation if they log it often\n- Brand names and specific products should match their historical entries`
+      ? `\n\nUSER'S FREQUENTLY LOGGED ITEMS (use these for better accuracy):\n${frequentItems.map(({ item, count }) => `- "${item}" (logged ${count}x)`).join('\n')}\n\nIMPORTANT: When parsing input, check if it matches any of the user's frequent items. For example:\n- "element" likely refers to the "LMNT" brand if that's in their history\n- "chicken thigh" likely refers to their usual preparation if they log it often\n- Pay attention to flavor/variant keywords (citrus, lemonade, chocolate, vanilla, etc.) and match them accurately\n- Brand names and specific products should match their historical entries`
       : '';
 
     const systemPrompt = buildSystemPrompt(userContextSection);

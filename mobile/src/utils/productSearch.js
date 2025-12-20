@@ -4,6 +4,18 @@
  */
 
 import { Logger } from './logger';
+import Constants from 'expo-constants';
+
+// Known supplement and food brands for detection
+const KNOWN_BRANDS = [
+  'lmnt', 'now', 'jarrow', 'thorne', 'pure encapsulations',
+  'nature made', 'solgar', 'garden of life', 'optimum nutrition',
+  'life extension', 'nordic naturals', 'carlson', 'doctors best',
+  'vital proteins', 'ancestral supplements', 'seeking health',
+  'designs for health', 'integrative therapeutics', 'klaire labs',
+  'nutricost', 'bulk supplements', 'myprotein', 'orgain',
+  'vega', 'amazing grass', 'sports research', 'zhou nutrition'
+];
 
 /**
  * Search Open Food Facts database (branded products, supplements)
@@ -80,8 +92,14 @@ export async function searchOpenFoodFacts(query, limit = 10, userId = null) {
  * Search USDA FoodData Central (generic foods)
  * Requires API key: https://fdc.nal.usda.gov/api-key-signup.html
  */
-export async function searchUSDAFoodData(query, apiKey = process.env.EXPO_PUBLIC_USDA_API_KEY, limit = 10, userId = null) {
-  if (!apiKey || apiKey === 'your_usda_api_key_here') {
+export async function searchUSDAFoodData(query, apiKey, limit = 10, userId = null) {
+  // Get API key from environment if not provided
+  // In Expo, EXPO_PUBLIC_ variables are available via Constants.expoConfig.extra
+  const usdaKey = apiKey ||
+                  Constants.expoConfig?.extra?.EXPO_PUBLIC_USDA_API_KEY ||
+                  process.env.EXPO_PUBLIC_USDA_API_KEY;
+
+  if (!usdaKey || usdaKey === 'your_usda_api_key_here') {
     console.log('USDA API key not configured, skipping USDA search');
     return [];
   }
@@ -89,7 +107,7 @@ export async function searchUSDAFoodData(query, apiKey = process.env.EXPO_PUBLIC
   try {
     const startTime = Date.now();
     const response = await fetch(
-      `https://api.nal.usda.gov/fdc/v1/foods/search?api_key=${apiKey}&query=${encodeURIComponent(query)}&pageSize=${limit}`
+      `https://api.nal.usda.gov/fdc/v1/foods/search?api_key=${usdaKey}&query=${encodeURIComponent(query)}&pageSize=${limit}`
     );
     const duration = Date.now() - startTime;
 
@@ -327,18 +345,97 @@ export async function searchAllProducts(query, usdaApiKey = process.env.EXPO_PUB
 }
 
 /**
- * Determine if we should trigger product search
+ * Detect if a description contains a known brand name
  */
-export function shouldSearchProducts(eventType, eventData, confidence = 50) {
+function detectsKnownBrand(description) {
+  if (!description) return false;
+  const descLower = description.toLowerCase();
+  return KNOWN_BRANDS.some(brand => descLower.includes(brand));
+}
+
+/**
+ * Detect if Claude performed phonetic transformation on the input
+ * e.g., "element" -> "lmnt", "citrus element" -> "citrus lmnt"
+ */
+function detectPhoneticTransformation(userInput, claudeOutput) {
+  if (!userInput || !claudeOutput) return false;
+
+  const inputWords = userInput.toLowerCase().split(/\s+/);
+  const outputWords = claudeOutput.toLowerCase().split(/\s+/);
+
+  // Check if Claude changed words phonetically
+  for (const inputWord of inputWords) {
+    const inputPhonetic = inputWord.replace(/[aeiou]/g, '');
+
+    for (const outputWord of outputWords) {
+      const outputPhonetic = outputWord.replace(/[aeiou]/g, '');
+
+      // If phonetic forms match but original words don't, transformation detected
+      if (inputPhonetic === outputPhonetic && inputWord !== outputWord) {
+        console.log(`Phonetic transformation detected: "${inputWord}" -> "${outputWord}"`);
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Determine if we should trigger product search
+ * Phase 1 Implementation: Intelligent conditional search
+ *
+ * @param {string} eventType - Type of event (food, supplement, medication, etc.)
+ * @param {object} eventData - Parsed event data with description/name
+ * @param {number} confidence - Claude's confidence score (0-100)
+ * @param {string} userInput - Original user input text
+ * @param {string} claudeOutput - Claude's parsed description/name
+ * @returns {boolean} Whether to search product databases
+ */
+export function shouldSearchProducts(eventType, eventData, confidence = 50, userInput = '', claudeOutput = '') {
   // Only search for food, supplement, medication
   if (!['food', 'supplement', 'medication'].includes(eventType)) {
     return false;
   }
 
-  // ALWAYS search for food, supplements, and medications to ensure accuracy
-  // Even when Claude is confident, it might have transcribed incorrectly
-  // (e.g., "element" instead of "LMNT")
-  // The confirmation screen will show options for user to verify/select
-  console.log(`Triggering product search for ${eventType} (confidence: ${confidence}%)`);
+  const description = eventData?.description || eventData?.name || claudeOutput || '';
+
+  // ALWAYS search for food (generic, needs product selection)
+  if (eventType === 'food') {
+    console.log(`Triggering product search for food (confidence: ${confidence}%)`);
+    return true;
+  }
+
+  // SEARCH if confidence is below or at threshold
+  if (confidence <= 83) {
+    console.log(`Triggering product search - confidence (${confidence}%) at or below threshold`);
+    return true;
+  }
+
+  // SEARCH if Claude performed phonetic transformation
+  // This catches cases like "element" -> "LMNT" where we want to show options
+  // Check this BEFORE brand detection to catch transformed brand names
+  if (userInput && claudeOutput && description) {
+    const hasTransformation = detectPhoneticTransformation(userInput, description);
+    if (hasTransformation) {
+      console.log(`Phonetic transformation detected: "${userInput}" -> "${description}"`);
+      console.log(`Triggering product search - phonetic transformation detected`);
+      return true;
+    }
+  }
+
+  // SKIP search for very high confidence supplements/medications with brand names
+  // Only if no transformation detected above
+  if (eventType === 'supplement' || eventType === 'medication') {
+    const hasBrandName = detectsKnownBrand(description);
+    if (hasBrandName && confidence > 83) {
+      console.log(`Skipping product search - high confidence (${confidence}%) ${eventType} with known brand`);
+      return false;
+    }
+  }
+
+  // Default: search for supplements/medications without known brands
+  // This catches generic supplements like "Magnesium" or "Vitamin D" without brand
+  console.log(`Triggering product search - ${eventType} without known brand (confidence: ${confidence}%)`);
   return true;
 }

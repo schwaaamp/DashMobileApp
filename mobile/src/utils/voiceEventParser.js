@@ -110,8 +110,9 @@ export async function parseTextWithClaude(text, apiKey, userHistory = [], userId
   const frequentItems = extractFrequentItems(userHistory);
   const userContextSection = frequentItems.length > 0
     ? `\n\nUSER'S FREQUENTLY LOGGED ITEMS (use these for better accuracy):\n${frequentItems.map(({ item, count }) => `- "${item}" (logged ${count}x)`).join('\n')}\n\nIMPORTANT: When parsing input, check if it matches any of the user's frequent items. For example:
-- "element lemonade" likely means "LMNT lemonade" if that's in their history
+- "element" likely refers to the "LMNT" brand if that's in their history
 - "chicken thigh" likely refers to their usual preparation if they log it often
+- Pay attention to flavor/variant keywords (citrus, lemonade, chocolate, vanilla, etc.) and match them accurately
 - Brand names and specific products should match their historical entries`
     : '';
 
@@ -462,14 +463,22 @@ export async function processTextInput(text, userId, apiKey, captureMethod = 'ma
 
       // Step 5: Check if we should search for products
       let productOptions = null;
-      const shouldSearch = shouldSearchProducts(parsed.event_type, parsed.event_data, confidence);
+      const claudeOutput = parsed.event_data.description || parsed.event_data.name || '';
+      const shouldSearch = shouldSearchProducts(
+        parsed.event_type,
+        parsed.event_data,
+        confidence,
+        text,  // userInput
+        claudeOutput  // claudeOutput
+      );
       console.log(`Product search decision: ${shouldSearch} (confidence: ${confidence}%, type: ${parsed.event_type})`);
 
       await Logger.info('voice_processing', 'Product search decision', {
         should_search: shouldSearch,
         event_type: parsed.event_type,
         confidence,
-        input_text: text
+        input_text: text,
+        claude_output: claudeOutput
       }, userId);
 
       if (shouldSearch) {
