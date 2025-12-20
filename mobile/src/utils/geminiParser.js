@@ -36,6 +36,88 @@ const EVENT_TYPES = {
   }
 };
 
+// Gemini API response schema to ensure valid JSON output
+const GEMINI_RESPONSE_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    transcription: {
+      type: "STRING",
+      description: "Exact transcription of the user's audio input"
+    },
+    event_type: {
+      type: "STRING",
+      description: "Type of health event",
+      enum: ["food", "glucose", "insulin", "activity", "supplement", "sauna", "medication", "symptom"]
+    },
+    event_data: {
+      type: "OBJECT",
+      description: "Event-specific data fields"
+    },
+    time_info: {
+      type: "OBJECT",
+      nullable: true,
+      properties: {
+        relative_minutes_ago: {
+          type: "NUMBER",
+          nullable: true
+        },
+        specific_time: {
+          type: "STRING",
+          nullable: true
+        },
+        specific_date: {
+          type: "STRING",
+          nullable: true
+        }
+      }
+    },
+    confidence: {
+      type: "NUMBER",
+      description: "Confidence score from 0-100"
+    }
+  },
+  required: ["event_type", "event_data", "confidence"]
+};
+
+// Text-only response schema (no transcription field)
+const TEXT_RESPONSE_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    event_type: {
+      type: "STRING",
+      description: "Type of health event",
+      enum: ["food", "glucose", "insulin", "activity", "supplement", "sauna", "medication", "symptom"]
+    },
+    event_data: {
+      type: "OBJECT",
+      description: "Event-specific data fields"
+    },
+    time_info: {
+      type: "OBJECT",
+      nullable: true,
+      properties: {
+        relative_minutes_ago: {
+          type: "NUMBER",
+          nullable: true
+        },
+        specific_time: {
+          type: "STRING",
+          nullable: true
+        },
+        specific_date: {
+          type: "STRING",
+          nullable: true
+        }
+      }
+    },
+    confidence: {
+      type: "NUMBER",
+      description: "Confidence score from 0-100"
+    }
+  },
+  required: ["event_type", "event_data", "confidence"]
+};
+
 /**
  * Parse audio using Gemini API (transcription + parsing in one call)
  * @param {string} audioUri - The URI to the audio file
@@ -167,8 +249,9 @@ Output: {
       }],
       generationConfig: {
         temperature: 0.1,
-        maxOutputTokens: 1024,
-        responseMimeType: "application/json"
+        maxOutputTokens: 2048,
+        responseMimeType: "application/json",
+        responseSchema: GEMINI_RESPONSE_SCHEMA
       }
     };
 
@@ -281,8 +364,9 @@ export async function parseTextWithGemini(text, apiKey, userHistory = []) {
       }],
       generationConfig: {
         temperature: 0.1,
-        maxOutputTokens: 1024,
-        responseMimeType: "application/json"
+        maxOutputTokens: 2048,
+        responseMimeType: "application/json",
+        responseSchema: TEXT_RESPONSE_SCHEMA
       }
     };
 
