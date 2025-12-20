@@ -503,8 +503,9 @@ export async function processTextInput(text, userId, apiKey, captureMethod = 'ma
       }
 
       // Determine if we should show confirmation screen
+      // Only show confirmation if incomplete OR if we have product options to show
       const needsConfirmation = !parsed.complete ||
-                                (shouldSearch && ['food', 'supplement', 'medication'].includes(parsed.event_type));
+                                (productOptions?.length > 0 && ['food', 'supplement', 'medication'].includes(parsed.event_type));
 
       if (parsed.complete && !needsConfirmation) {
         // Step 6a: If complete and doesn't need confirmation, save to voice_events
@@ -525,7 +526,8 @@ export async function processTextInput(text, userId, apiKey, captureMethod = 'ma
           success: true,
           complete: true,
           event: voiceEvent,
-          auditId: auditRecord.id
+          auditId: auditRecord.id,
+          confidence
         };
       } else {
         // Step 6b: Show confirmation screen for incomplete entries or food/supplement/medication
