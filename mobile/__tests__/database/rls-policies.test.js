@@ -238,7 +238,7 @@ describe('RLS Policy Tests - Database Operations', () => {
         'supplement',
         500,
         'mg',
-        'gemini-1.5-flash',
+        'gemini-1.5-flash-002',
         { test: true }
       );
 
@@ -255,7 +255,7 @@ describe('RLS Policy Tests - Database Operations', () => {
           'food',
           null,
           null,
-          'gemini-1.5-flash',
+          'gemini-1.5-flash-002',
           {}
         )
       ).rejects.toThrow('userId is required');
@@ -269,7 +269,7 @@ describe('RLS Policy Tests - Database Operations', () => {
           'food',
           null,
           null,
-          'gemini-1.5-flash',
+          'gemini-1.5-flash-002',
           {}
         )
       ).rejects.toThrow('userId is required');
@@ -283,7 +283,7 @@ describe('RLS Policy Tests - Database Operations', () => {
           'food',
           null,
           null,
-          'gemini-1.5-flash',
+          'gemini-1.5-flash-002',
           {}
         )
       ).rejects.toThrow('userId is required');
@@ -297,7 +297,7 @@ describe('RLS Policy Tests - Database Operations', () => {
           'food',
           null,
           null,
-          'gemini-1.5-flash',
+          'gemini-1.5-flash-002',
           {}
         )
       ).rejects.toThrow('userId has invalid UUID format');
@@ -327,7 +327,7 @@ describe('RLS Policy Tests - Database Operations', () => {
           'food',
           null,
           null,
-          'gemini-1.5-flash',
+          'gemini-1.5-flash-002',
           {}
         )
       ).rejects.toThrow('Failed to create audit record');
@@ -422,7 +422,7 @@ describe('RLS Policy Tests - Edge Cases', () => {
           'supplement',
           null,
           null,
-          'gemini-1.5-flash',
+          'gemini-1.5-flash-002',
           { capture_method: 'voice' }
         )
       ).rejects.toThrow();
@@ -508,7 +508,7 @@ describe('Integration Test - Voice Input Flow', () => {
       'supplement',
       null,
       null,
-      'gemini-1.5-flash',
+      'gemini-1.5-flash-002',
       { capture_method: 'voice' }
     );
 

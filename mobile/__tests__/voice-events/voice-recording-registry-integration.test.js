@@ -135,7 +135,7 @@ describe('Voice Recording Registry Integration', () => {
       expect(registryMatch).toBeDefined();
 
       // Create audit record with correct model name
-      const geminiModel = registryMatch ? 'registry_bypass' : 'gemini-1.5-flash';
+      const geminiModel = registryMatch ? 'registry_bypass' : 'gemini-1.5-flash-002';
 
       const auditRecord = await createAuditRecord(
         mockUserId,
@@ -292,7 +292,7 @@ describe('Voice Recording Registry Integration', () => {
       expect(fuzzyMatch).toBeDefined();
 
       const geminiModel = registryMatch ? 'registry_bypass'
-        : (fuzzyMatch ? 'registry_fuzzy_bypass' : 'gemini-1.5-flash');
+        : (fuzzyMatch ? 'registry_fuzzy_bypass' : 'gemini-1.5-flash-002');
 
       expect(geminiModel).toBe('registry_fuzzy_bypass');
 
@@ -814,7 +814,7 @@ describe('Voice Recording Registry Integration', () => {
       expect(geminiParsed.confidence).toBe(75);
     });
 
-    it('should create audit record with gemini-1.5-flash model when no registry match', async () => {
+    it('should create audit record with gemini-1.5-flash-002 model when no registry match', async () => {
       supabase.from = createSupabaseMock({
         auditId: mockAuditId,
         registryEntries: []
@@ -836,9 +836,9 @@ describe('Voice Recording Registry Integration', () => {
       const fuzzyMatch = await fuzzyMatchUserProducts(geminiParsed.transcription, mockUserId);
 
       const geminiModel = registryMatch ? 'registry_bypass'
-        : (fuzzyMatch ? 'registry_fuzzy_bypass' : 'gemini-1.5-flash');
+        : (fuzzyMatch ? 'registry_fuzzy_bypass' : 'gemini-1.5-flash-002');
 
-      expect(geminiModel).toBe('gemini-1.5-flash');
+      expect(geminiModel).toBe('gemini-1.5-flash-002');
 
       const auditRecord = await createAuditRecord(
         mockUserId,
