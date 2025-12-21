@@ -3,6 +3,7 @@
 ## Important Note: Database Schema Clarification
 
 Based on code analysis, the current database schema uses:
+
 - **`voice_records_audit`** - Stores raw input, transcription, and parsing metadata
 - **`voice_events`** - Stores final structured events with normalized data
 
@@ -13,9 +14,13 @@ Based on code analysis, the current database schema uses:
 ## Test Cases Overview
 
 ### Test 1: Voice Command - Product Recognition with Phonetic Matching
+
 ### Test 2: Photo Input - Supplement with Follow-up Question (EXPECTED TO FAIL)
+
 ### Test 3: Text Input - Time Range Parsing
+
 ### Test 4: Voice Command - Insulin Logging
+
 ### Test 5: Voice Command - Multiple Food Items with Serving Size Estimation
 
 ---
@@ -25,6 +30,7 @@ Based on code analysis, the current database schema uses:
 **Goal:** Verify phonetic matching correctly identifies "element" as "LMNT" brand
 
 ### Setup
+
 ```javascript
 // Mock audio file containing: "lemonade element pack"
 const mockAudioTranscription = "lemonade element pack";
@@ -32,6 +38,7 @@ const mockUserId = "test-user-123";
 ```
 
 ### Test Steps
+
 1. Simulate voice recording containing "lemonade element pack"
 2. Send to `parseAudioWithGemini()`
 3. Verify product search triggers via `shouldSearchProducts()`
@@ -44,6 +51,7 @@ const mockUserId = "test-user-123";
 ### Expected Database State
 
 **voice_records_audit table:**
+
 ```javascript
 {
   user_id: "test-user-123",
@@ -52,7 +60,7 @@ const mockUserId = "test-user-123";
   value: 1,
   units: "pack",
   nlp_status: "awaiting_user_clarification_success",
-  nlp_model: "gemini-1.5-flash",
+  nlp_model: "gemini-2.5-flash",
   nlp_metadata: {
     capture_method: "voice",
     confidence: 85,
@@ -63,6 +71,7 @@ const mockUserId = "test-user-123";
 ```
 
 **voice_events table:**
+
 ```javascript
 {
   user_id: "test-user-123",
@@ -82,6 +91,7 @@ const mockUserId = "test-user-123";
 ```
 
 ### Assertions
+
 - ✅ Phonetic matching creates "lmnt" variation from "element"
 - ✅ Product search returns LMNT brand products
 - ✅ Confirmation screen shows LMNT options
@@ -97,17 +107,22 @@ const mockUserId = "test-user-123";
 **Goal:** Verify photo analysis can identify supplement and prompt for quantity
 
 ### Current Implementation Gap
+
 The `/api/photo/analyze` endpoint is **not implemented**. This test will fail until:
+
 1. Backend implements image recognition (OCR + product matching)
 2. System adds follow-up question capability for missing fields
 
 ### Setup
+
 ```javascript
-const photoPath = "/Users/schwaaamp/DashMobileApp/mobile/__tests__/now_magtein.png";
+const photoPath =
+  "/Users/schwaaamp/DashMobileApp/mobile/__tests__/now_magtein.png";
 const mockUserId = "test-user-123";
 ```
 
 ### Test Steps
+
 1. User captures photo of NOW Magtein bottle
 2. Photo uploaded to cloud storage
 3. System calls `/api/photo/analyze` with image URL
@@ -120,6 +135,7 @@ const mockUserId = "test-user-123";
 ### Expected Database State (After Implementation)
 
 **voice_records_audit table:**
+
 ```javascript
 {
   user_id: "test-user-123",
@@ -141,6 +157,7 @@ const mockUserId = "test-user-123";
 **After user provides "2 capsules":**
 
 **voice_events table:**
+
 ```javascript
 {
   user_id: "test-user-123",
@@ -157,6 +174,7 @@ const mockUserId = "test-user-123";
 ```
 
 ### Assertions (After Implementation)
+
 - ❌ **CURRENTLY FAILS**: `/api/photo/analyze` not implemented
 - ❌ **CURRENTLY FAILS**: No follow-up question mechanism exists
 - ✅ OCR should extract "NOW Magtein" from image
@@ -167,6 +185,7 @@ const mockUserId = "test-user-123";
 - ✅ voice_events.event_data.units = "capsules"
 
 ### Implementation Checklist
+
 - [ ] Build `/api/photo/analyze` endpoint with OCR (Google Vision API / Tesseract)
 - [ ] Add product database lookup from OCR text
 - [ ] Create follow-up question UI component
@@ -180,6 +199,7 @@ const mockUserId = "test-user-123";
 **Goal:** Verify time range parsing and duration calculation
 
 ### Setup
+
 ```javascript
 const textInput = "sauna 2-2:25pm";
 const mockUserId = "test-user-123";
@@ -187,6 +207,7 @@ const currentTime = new Date("2025-12-18T14:00:00Z"); // 2pm today
 ```
 
 ### Test Steps
+
 1. User enters text: "sauna 2-2:25pm"
 2. Send to `parseTextWithGemini()`
 3. Gemini extracts:
@@ -200,6 +221,7 @@ const currentTime = new Date("2025-12-18T14:00:00Z"); // 2pm today
 ### Expected Database State
 
 **voice_records_audit table:**
+
 ```javascript
 {
   user_id: "test-user-123",
@@ -208,7 +230,7 @@ const currentTime = new Date("2025-12-18T14:00:00Z"); // 2pm today
   value: 25,
   units: "minutes",
   nlp_status: "parsed",
-  nlp_model: "gemini-1.5-flash",
+  nlp_model: "gemini-2.5-flash",
   nlp_metadata: {
     capture_method: "manual",
     confidence: 95,
@@ -218,6 +240,7 @@ const currentTime = new Date("2025-12-18T14:00:00Z"); // 2pm today
 ```
 
 **voice_events table:**
+
 ```javascript
 {
   user_id: "test-user-123",
@@ -234,6 +257,7 @@ const currentTime = new Date("2025-12-18T14:00:00Z"); // 2pm today
 ```
 
 ### Assertions
+
 - ✅ Time range "2-2:25pm" correctly parsed as 25 minute duration
 - ✅ Event time set to start of range (2:00pm)
 - ✅ voice_events.event_type = "sauna"
@@ -247,12 +271,14 @@ const currentTime = new Date("2025-12-18T14:00:00Z"); // 2pm today
 **Goal:** Verify insulin logging with correct units
 
 ### Setup
+
 ```javascript
 const mockAudioTranscription = "6 units basal insulin";
 const mockUserId = "test-user-123";
 ```
 
 ### Test Steps
+
 1. Simulate voice recording: "6 units basal insulin"
 2. Send to `parseAudioWithGemini()`
 3. Gemini extracts:
@@ -266,6 +292,7 @@ const mockUserId = "test-user-123";
 ### Expected Database State
 
 **voice_records_audit table:**
+
 ```javascript
 {
   user_id: "test-user-123",
@@ -274,7 +301,7 @@ const mockUserId = "test-user-123";
   value: 6,
   units: "units",
   nlp_status: "parsed",
-  nlp_model: "gemini-1.5-flash",
+  nlp_model: "gemini-2.5-flash",
   nlp_metadata: {
     capture_method: "voice",
     confidence: 98,
@@ -284,6 +311,7 @@ const mockUserId = "test-user-123";
 ```
 
 **voice_events table:**
+
 ```javascript
 {
   user_id: "test-user-123",
@@ -301,6 +329,7 @@ const mockUserId = "test-user-123";
 ```
 
 ### Assertions
+
 - ✅ Insulin type correctly identified as "basal"
 - ✅ No product search triggered (insulin is not searchable)
 - ✅ voice_events.event_type = "insulin"
@@ -318,6 +347,7 @@ const mockUserId = "test-user-123";
 ### Current Challenge: Serving Size Estimation
 
 The test requires:
+
 - **Record 1**: chicken thigh → value=1, units="unit" (count-based)
 - **Record 2**: broccoli → value=[average_serving_size], units=[average_serving_size_units]
 - **Record 3**: wegmans hummus → value=[average_serving_size], units=[average_serving_size_units]
@@ -325,6 +355,7 @@ The test requires:
 ### Proposed Serving Size Strategy
 
 **Option 1: User History-Based Estimation (RECOMMENDED)**
+
 ```javascript
 // Look at user's past logs for the same item
 function estimateServingFromHistory(userId, itemDescription) {
@@ -336,6 +367,7 @@ function estimateServingFromHistory(userId, itemDescription) {
 ```
 
 **Option 2: Product Database Defaults**
+
 ```javascript
 // Use serving sizes from USDA/Open Food Facts
 // USDA typical servings:
@@ -345,6 +377,7 @@ function estimateServingFromHistory(userId, itemDescription) {
 ```
 
 **Option 3: AI-Powered Contextual Estimation**
+
 ```javascript
 // Include in Gemini prompt:
 // "If serving size is not specified, estimate based on:
@@ -354,6 +387,7 @@ function estimateServingFromHistory(userId, itemDescription) {
 ```
 
 **Option 4: Hybrid Approach (BEST)**
+
 ```javascript
 async function estimateServing(userId, itemDescription, eventContext) {
   // 1. Check user history first
@@ -376,6 +410,7 @@ async function estimateServing(userId, itemDescription, eventContext) {
 ### Recommended Implementation
 
 **Step 1: Modify Gemini Prompt**
+
 ```javascript
 // In voiceEventParser.js, add to system prompt:
 `
@@ -386,10 +421,11 @@ When a user mentions multiple food items without quantities:
    - Vegetables: 1 cup or 100g
    - Condiments/spreads: 2 tablespoons or 30g
    - Include both value and units in your response
-`
+`;
 ```
 
 **Step 2: Create Serving Size Lookup Table**
+
 ```javascript
 // Add to geminiParser.js or new servingSizeDefaults.js
 const STANDARD_SERVINGS = {
@@ -409,11 +445,14 @@ const STANDARD_SERVINGS = {
 
 function getStandardServing(itemName) {
   const normalized = itemName.toLowerCase().trim();
-  return STANDARD_SERVINGS[normalized] || { value: 1, units: "serving", grams: null };
+  return (
+    STANDARD_SERVINGS[normalized] || { value: 1, units: "serving", grams: null }
+  );
 }
 ```
 
 **Step 3: Store Individual Events**
+
 ```javascript
 // Modify createVoiceEvent to handle multi-item foods
 async function createMultiItemFoodEvent(userId, items, eventTime, auditId) {
@@ -432,7 +471,7 @@ async function createMultiItemFoodEvent(userId, items, eventTime, auditId) {
         calories: item.calories || null,
         protein: item.protein || null,
         carbs: item.carbs || null,
-        fat: item.fat || null
+        fat: item.fat || null,
       },
       eventTime,
       auditId,
@@ -443,6 +482,7 @@ async function createMultiItemFoodEvent(userId, items, eventTime, auditId) {
 ```
 
 ### Test Steps
+
 1. User speaks: "chicken thigh, broccoli, and wegmans hummus"
 2. Gemini parses as multi-item food event
 3. For each item, estimate serving size:
@@ -456,6 +496,7 @@ async function createMultiItemFoodEvent(userId, items, eventTime, auditId) {
 ### Expected Database State
 
 **voice_records_audit table:**
+
 ```javascript
 {
   user_id: "test-user-123",
@@ -464,7 +505,7 @@ async function createMultiItemFoodEvent(userId, items, eventTime, auditId) {
   value: 3,  // Number of items
   units: "items",
   nlp_status: "parsed",
-  nlp_model: "gemini-1.5-flash",
+  nlp_model: "gemini-2.5-flash",
   nlp_metadata: {
     capture_method: "voice",
     multi_item_count: 3,
@@ -475,7 +516,8 @@ async function createMultiItemFoodEvent(userId, items, eventTime, auditId) {
 
 **voice_events table (3 separate entries):**
 
-*Event 1:*
+_Event 1:_
+
 ```javascript
 {
   event_type: "food",
@@ -492,7 +534,8 @@ async function createMultiItemFoodEvent(userId, items, eventTime, auditId) {
 }
 ```
 
-*Event 2:*
+_Event 2:_
+
 ```javascript
 {
   event_type: "food",
@@ -509,7 +552,8 @@ async function createMultiItemFoodEvent(userId, items, eventTime, auditId) {
 }
 ```
 
-*Event 3:*
+_Event 3:_
+
 ```javascript
 {
   event_type: "food",
@@ -527,6 +571,7 @@ async function createMultiItemFoodEvent(userId, items, eventTime, auditId) {
 ```
 
 ### Assertions
+
 - ✅ Three separate events created in voice_events
 - ✅ Event 1: description="chicken thigh", serving_size="1 unit"
 - ✅ Event 2: description="broccoli", serving_size="1 cup"
@@ -551,7 +596,7 @@ class ServingSizeEstimator {
         value: userPattern.median_value,
         units: userPattern.common_units,
         source: "user_history",
-        confidence: userPattern.confidence
+        confidence: userPattern.confidence,
       };
     }
 
@@ -562,7 +607,7 @@ class ServingSizeEstimator {
         value: productMatch.serving_value,
         units: productMatch.serving_units,
         source: "product_database",
-        confidence: productMatch.confidence
+        confidence: productMatch.confidence,
       };
     }
 
@@ -573,7 +618,7 @@ class ServingSizeEstimator {
         value: usdaStandard.value,
         units: usdaStandard.units,
         source: "usda_standard",
-        confidence: 0.6
+        confidence: 0.6,
       };
     }
 
@@ -584,7 +629,7 @@ class ServingSizeEstimator {
         value: aiEstimate.value,
         units: aiEstimate.units,
         source: "ai_estimate",
-        confidence: aiEstimate.confidence
+        confidence: aiEstimate.confidence,
       };
     }
 
@@ -593,7 +638,7 @@ class ServingSizeEstimator {
       value: 1,
       units: "serving",
       source: "default",
-      confidence: 0.3
+      confidence: 0.3,
     };
   }
 
@@ -632,11 +677,13 @@ class ServingSizeEstimator {
 ### Implementation Priority
 
 1. **Phase 1** (Minimum Viable):
+
    - USDA standard serving lookup table
    - Gemini prompt enhancement for serving estimation
    - Multi-item parsing logic
 
 2. **Phase 2** (Enhanced):
+
    - Product database integration for serving sizes
    - Multi-item parsing and record creation
    - Confidence scoring
@@ -665,6 +712,7 @@ mobile/__tests__/
 ```
 
 Each test file should:
+
 - Mock Supabase client
 - Mock Gemini API responses
 - Verify database inserts with exact expected values

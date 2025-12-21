@@ -508,7 +508,7 @@ describe('Integration Test - Voice Input Flow', () => {
       'supplement',
       null,
       null,
-      'gemini-1.5-flash-002',
+      'gemini-2.5-flash',
       { capture_method: 'voice' }
     );
 
