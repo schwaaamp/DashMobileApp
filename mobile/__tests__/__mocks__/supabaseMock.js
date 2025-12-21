@@ -146,7 +146,8 @@ export function createSupabaseMock(options = {}) {
           select: jest.fn(() => ({
             single: jest.fn(() => Promise.resolve({
               data: {
-                id: 'event-new',
+                event_id: 'event-new',  // Database column name
+                id: 'event-new',        // Aliased for interface consistency
                 ...(Array.isArray(data) ? data[0] : data)
               },
               error: null

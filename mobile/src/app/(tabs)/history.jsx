@@ -77,7 +77,7 @@ export default function HistoryScreen() {
 
       const query = supabase
         .from('voice_events')
-        .select('*')
+        .select('event_id, user_id, event_type, event_data, event_time, capture_method, source_record_id, created_at')
         .eq('user_id', user.id)
         .order('event_time', { ascending: false })
         .limit(100);
@@ -89,7 +89,11 @@ export default function HistoryScreen() {
         throw new Error('Failed to fetch events');
       }
 
-      return data || [];
+      // Map event_id to id for consistent interface
+      return (data || []).map(event => ({
+        ...event,
+        id: event.event_id
+      }));
     },
     enabled: !!user?.id,
   });

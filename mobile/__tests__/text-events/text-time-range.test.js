@@ -147,7 +147,8 @@ describe('Text Time Range Parsing - Sauna', () => {
     const eventTime = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 14, 0, 0);
 
     const mockVoiceEvent = {
-      id: mockVoiceEventId,
+      event_id: mockVoiceEventId,  // Database column name
+      id: mockVoiceEventId,         // Aliased for interface consistency
       user_id: mockUserId,
       event_type: 'sauna',
       event_data: {

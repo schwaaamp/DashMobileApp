@@ -55,7 +55,8 @@ describe('HistoryScreen', () => {
 
   const mockEvents = [
     {
-      id: 'event-1',
+      event_id: 'event-1',  // Database column name
+      id: 'event-1',        // Aliased for interface consistency
       user_id: 'test-user-id',
       event_type: 'food',
       event_data: {
@@ -66,6 +67,7 @@ describe('HistoryScreen', () => {
       created_at: new Date().toISOString(),
     },
     {
+      event_id: 'event-2',
       id: 'event-2',
       user_id: 'test-user-id',
       event_type: 'glucose',
@@ -77,6 +79,7 @@ describe('HistoryScreen', () => {
       created_at: new Date(Date.now() - 3600000).toISOString(),
     },
     {
+      event_id: 'event-3',
       id: 'event-3',
       user_id: 'test-user-id',
       event_type: 'activity',

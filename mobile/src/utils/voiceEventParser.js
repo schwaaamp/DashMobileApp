@@ -592,7 +592,8 @@ export async function createVoiceEvent(userId, eventType, eventData, eventTime, 
     }
   }
 
-  return data;
+  // Map event_id to id for consistent interface
+  return data ? { ...data, id: data.event_id } : data;
 }
 
 /**
