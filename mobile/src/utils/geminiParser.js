@@ -58,12 +58,27 @@ const GEMINI_RESPONSE_SCHEMA = {
         brand: { type: "STRING", nullable: true },
         dosage: { type: "STRING", nullable: true },
         units: { type: "STRING", nullable: true },
-        value: { type: "NUMBER", nullable: true },
-        duration: { type: "STRING", nullable: true },
         intensity: { type: "STRING", nullable: true },
-        temperature: { type: "STRING", nullable: true },
         route: { type: "STRING", nullable: true },
-        severity: { type: "STRING", nullable: true }
+        severity: { type: "STRING", nullable: true },
+        activity_type: { type: "STRING", nullable: true },
+        insulin_type: { type: "STRING", nullable: true },
+        temperature_units: { type: "STRING", nullable: true },
+        value: {
+          type: "STRING",
+          nullable: true,
+          description: "Numeric value as string, max 2 decimal places (e.g., '10', '4.5', '125.75')"
+        },
+        duration: {
+          type: "INTEGER",
+          nullable: true,
+          description: "Duration in whole minutes"
+        },
+        temperature: {
+          type: "INTEGER",
+          nullable: true,
+          description: "Temperature in whole degrees"
+        }
       }
     },
     time_info: {
@@ -71,22 +86,25 @@ const GEMINI_RESPONSE_SCHEMA = {
       nullable: true,
       properties: {
         relative_minutes_ago: {
-          type: "NUMBER",
-          nullable: true
+          type: "INTEGER",
+          nullable: true,
+          description: "Whole minutes ago"
         },
         specific_time: {
           type: "STRING",
-          nullable: true
+          nullable: true,
+          description: "Time in HH:MM format"
         },
         specific_date: {
           type: "STRING",
-          nullable: true
+          nullable: true,
+          description: "Date in YYYY-MM-DD format"
         }
       }
     },
     confidence: {
-      type: "NUMBER",
-      description: "Confidence score from 0-100"
+      type: "INTEGER",
+      description: "Confidence score 0-100"
     }
   },
   required: ["event_type", "event_data", "confidence"]
@@ -110,35 +128,33 @@ const TEXT_RESPONSE_SCHEMA = {
         brand: { type: "STRING", nullable: true },
         dosage: { type: "STRING", nullable: true },
         units: { type: "STRING", nullable: true },
-        value: { type: "NUMBER", nullable: true },
-        duration: { type: "STRING", nullable: true },
         intensity: { type: "STRING", nullable: true },
-        temperature: { type: "STRING", nullable: true },
         route: { type: "STRING", nullable: true },
-        severity: { type: "STRING", nullable: true }
+        severity: { type: "STRING", nullable: true },
+        activity_type: { type: "STRING", nullable: true },
+        insulin_type: { type: "STRING", nullable: true },
+        temperature_units: { type: "STRING", nullable: true },
+        value: {
+          type: "STRING",
+          nullable: true,
+          description: "Numeric value as string, max 2 decimal places"
+        },
+        duration: { type: "INTEGER", nullable: true },
+        temperature: { type: "INTEGER", nullable: true }
       }
     },
     time_info: {
       type: "OBJECT",
       nullable: true,
       properties: {
-        relative_minutes_ago: {
-          type: "NUMBER",
-          nullable: true
-        },
-        specific_time: {
-          type: "STRING",
-          nullable: true
-        },
-        specific_date: {
-          type: "STRING",
-          nullable: true
-        }
+        relative_minutes_ago: { type: "INTEGER", nullable: true },
+        specific_time: { type: "STRING", nullable: true },
+        specific_date: { type: "STRING", nullable: true }
       }
     },
     confidence: {
-      type: "NUMBER",
-      description: "Confidence score from 0-100"
+      type: "INTEGER",
+      description: "Confidence score 0-100"
     }
   },
   required: ["event_type", "event_data", "confidence"]
@@ -193,12 +209,33 @@ Users speak naturally and you need to transcribe and parse their input into stru
 
 CRITICAL: First transcribe the audio accurately, then parse the transcription into structured data.
 
-Return a JSON object with these fields:
+Return a COMPACT JSON object with these fields:
 - transcription: the exact text transcription of what the user said
 - event_type: one of [food, glucose, insulin, activity, supplement, sauna, medication, symptom]
 - event_data: object containing extracted fields based on event type
 - time_info: object with optional fields: { relative_minutes_ago: number, specific_time: "HH:MM", specific_date: "YYYY-MM-DD" } or null if referring to "now"
-- confidence: number 0-100 indicating how confident you are in the parsing (100=certain, 50=moderate, 0=guessing)
+- confidence: integer 0-100 indicating how confident you are in the parsing
+
+CRITICAL JSON FORMATTING RULES:
+1. For "value" field (insulin, glucose, etc.): Use STRING with max 2 decimal places
+   - Examples: "10", "4.5", "10.25", "125.75"
+   - NEVER: "10.0", "10.00", "10.000000..."
+   - Remove trailing zeros: "4.50" should be "4.5"
+   - Whole numbers have no decimal: "10" not "10.0"
+
+2. For "duration" field: Use INTEGER (whole minutes only)
+   - Examples: 30, 45, 120
+   - NEVER: 30.0, 30.5, "30"
+
+3. For "temperature" field: Use INTEGER (whole degrees only)
+   - Examples: 180, 185, 98
+   - NEVER: 180.0, 180.5, "180"
+
+4. For "relative_minutes_ago": Use INTEGER (whole minutes)
+   - Examples: 30, 60, 120
+
+5. For "confidence": Use INTEGER 0-100
+   - Examples: 95, 85, 100
 
 Event type schemas:
 ${JSON.stringify(EVENT_TYPES, null, 2)}
@@ -216,6 +253,10 @@ Rules:
 9. If no time is mentioned, set time_info to null (meaning "now")
 10. CRITICAL: Match input against user's frequent items for better accuracy (e.g., "element" → "LMNT")
 11. Temperature: default to Fahrenheit unless Celsius is explicitly mentioned
+12. CRITICAL NUMBER FORMATTING:
+    - "value" field: STRING with max 2 decimals, no trailing zeros ("10", "4.5", "125.75")
+    - "duration", "temperature", "relative_minutes_ago", "confidence": INTEGER (no decimals, no quotes)
+    - Remove all trailing zeros from decimal values
 
 Example outputs:
 
@@ -224,9 +265,34 @@ Output: {
   "transcription": "Log 6 units of basal insulin",
   "event_type": "insulin",
   "event_data": {
-    "value": 6,
+    "value": "6",
     "units": "units",
     "insulin_type": "basal"
+  },
+  "time_info": null,
+  "confidence": 95
+}
+
+Input: "Took 4.5 units of rapid insulin"
+Output: {
+  "transcription": "Took 4.5 units of rapid insulin",
+  "event_type": "insulin",
+  "event_data": {
+    "value": "4.5",
+    "units": "units",
+    "insulin_type": "rapid"
+  },
+  "time_info": null,
+  "confidence": 95
+}
+
+Input: "Blood glucose 125.75"
+Output: {
+  "transcription": "Blood glucose 125.75",
+  "event_type": "glucose",
+  "event_data": {
+    "value": "125.75",
+    "units": "mg/dL"
   },
   "time_info": null,
   "confidence": 95
