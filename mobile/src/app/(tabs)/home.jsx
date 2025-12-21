@@ -9,7 +9,7 @@ import {
   Alert,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { Mic, Camera, Send } from "lucide-react-native";
+import { Mic, Camera, Send, Check } from "lucide-react-native";
 import * as Haptics from "expo-haptics";
 import * as ImagePicker from "expo-image-picker";
 import { useRouter } from "expo-router";
@@ -52,6 +52,7 @@ export default function HomeScreen() {
   const [textInput, setTextInput] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
+  const [showSuccessCheckmark, setShowSuccessCheckmark] = useState(false);
   const recordingRef = useRef(null);
 
   const samplePrompts = [
@@ -238,8 +239,7 @@ export default function HomeScreen() {
         }
 
         // Determine if we should show confirmation screen
-        const needsConfirmation = !parsed.complete ||
-                                  (shouldSearch && ['food', 'supplement', 'medication'].includes(parsed.event_type));
+        const needsConfirmation = !parsed.complete || shouldSearch;
 
         if (parsed.complete && !needsConfirmation) {
           // Save directly
@@ -258,11 +258,12 @@ export default function HomeScreen() {
           );
           await updateAuditStatus(auditRecord.id, 'parsed');
 
-          Alert.alert(
-            "Success",
-            `Transcribed: "${parsed.transcription}"\n\nLog approved and saved!`,
-            [{ text: "OK" }]
-          );
+          // Show success checkmark for 1 second
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          setShowSuccessCheckmark(true);
+          setTimeout(() => {
+            setShowSuccessCheckmark(false);
+          }, 1000);
         } else {
           // Show confirmation screen
           console.log(`Going to confirmation screen - complete: ${parsed.complete}, products: ${productOptions?.length || 0}, needs confirmation: ${needsConfirmation}`);
@@ -469,8 +470,7 @@ export default function HomeScreen() {
       }
 
       // Determine if we should show confirmation screen
-      const needsConfirmation = !parsed.complete ||
-                                (shouldSearch && ['food', 'supplement', 'medication'].includes(parsed.event_type));
+      const needsConfirmation = !parsed.complete || shouldSearch;
 
       if (parsed.complete && !needsConfirmation) {
         // Save directly
@@ -490,11 +490,13 @@ export default function HomeScreen() {
         await updateAuditStatus(auditRecord.id, 'parsed');
 
         setTextInput("");
-        Alert.alert(
-          "Success",
-          "Log approved and saved!",
-          [{ text: "OK" }]
-        );
+
+        // Show success checkmark for 1 second
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        setShowSuccessCheckmark(true);
+        setTimeout(() => {
+          setShowSuccessCheckmark(false);
+        }, 1000);
       } else {
         // Show confirmation screen
         console.log(`Going to confirmation screen - complete: ${parsed.complete}, products: ${productOptions?.length || 0}, needs confirmation: ${needsConfirmation}`);
@@ -824,6 +826,41 @@ export default function HomeScreen() {
           </View>
         </View>
       </ScrollView>
+
+      {/* Success Checkmark Overlay */}
+      {showSuccessCheckmark && (
+        <View
+          style={{
+            position: "absolute",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            alignItems: "center",
+            justifyContent: "center",
+            backgroundColor: "rgba(0, 0, 0, 0.3)",
+            zIndex: 9999,
+          }}
+        >
+          <View
+            style={{
+              width: 120,
+              height: 120,
+              borderRadius: 60,
+              backgroundColor: "#10B981",
+              alignItems: "center",
+              justifyContent: "center",
+              shadowColor: "#10B981",
+              shadowOffset: { width: 0, height: 8 },
+              shadowOpacity: 0.3,
+              shadowRadius: 16,
+              elevation: 8,
+            }}
+          >
+            <Check size={64} color="#FFFFFF" strokeWidth={3} />
+          </View>
+        </View>
+      )}
     </View>
     </ProtectedRoute>
   );
