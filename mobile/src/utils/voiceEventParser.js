@@ -608,10 +608,9 @@ export async function processTextInput(text, userId, apiKey, captureMethod = 'ma
       has_transcription_metadata: !!transcriptionMetadata
     }, userId);
 
-    // Step 1: Fetch user's recent events for context
-    console.log('Fetching user history for context...');
-    const userHistory = await getUserRecentEvents(userId, 50);
-    console.log(`Found ${userHistory.length} recent events`);
+    // History fetching removed - user_product_registry now handles product recognition
+    // This eliminates a database query on every event, improving performance
+    const userHistory = []; // Empty array maintained for backward compatibility
 
     // Step 1.5: Check user's product registry FIRST (Phase 2 - Self-Learning)
     // This bypasses AI parsing for products the user has confirmed multiple times
@@ -623,7 +622,6 @@ export async function processTextInput(text, userId, apiKey, captureMethod = 'ma
       const claudeModel = 'claude-3-opus-20240229';
       const registryMetadata = {
         capture_method: captureMethod,
-        user_history_count: userHistory.length,
         claude_model: 'registry_bypass', // Indicate we bypassed AI
         registry_match: {
           source: registryMatch.source,
@@ -690,7 +688,6 @@ export async function processTextInput(text, userId, apiKey, captureMethod = 'ma
       const claudeModel = 'claude-3-opus-20240229';
       const registryMetadata = {
         capture_method: captureMethod,
-        user_history_count: userHistory.length,
         claude_model: 'registry_fuzzy_bypass',
         registry_match: {
           source: fuzzyMatch.source,
@@ -749,7 +746,6 @@ export async function processTextInput(text, userId, apiKey, captureMethod = 'ma
     const claudeModel = 'claude-3-opus-20240229';
     const initialMetadata = {
       capture_method: captureMethod,
-      user_history_count: userHistory.length,
       claude_model: claudeModel
     };
 

@@ -188,11 +188,9 @@ export async function parseAudioWithGemini(audioUri, apiKey, userHistory = []) {
 
     console.log(`Audio file type: ${mimeType}`);
 
-    // Extract frequently logged items for context
-    const frequentItems = extractFrequentItems(userHistory);
-    const userContextSection = frequentItems.length > 0
-      ? `\n\nUSER'S FREQUENTLY LOGGED ITEMS (use these for better accuracy):\n${frequentItems.map(({ item, count }) => `- "${item}" (logged ${count}x)`).join('\n')}\n\nIMPORTANT: When parsing input, check if it matches any of the user's frequent items. For example:\n- "element" likely refers to the "LMNT" brand if that's in their history\n- "chicken thigh" likely refers to their usual preparation if they log it often\n- Pay attention to flavor/variant keywords (citrus, lemonade, chocolate, vanilla, etc.) and match them accurately\n- Brand names and specific products should match their historical entries`
-      : '';
+    // Frequent items removed - user_product_registry now handles product recognition
+    // This reduces prompt tokens by ~200 and improves response time
+    const userContextSection = '';
 
     const systemPrompt = `You are an AI assistant for a health tracking and wellness app. Users log various health events throughout their day to monitor their health, manage conditions like diabetes, and track wellness activities.
 
@@ -251,7 +249,7 @@ Rules:
 7. For relative times ("30 min jog"), set relative_minutes_ago to indicate when it started
 8. For specific times (e.g., "I ate lunch at noon"), set specific_time to that time
 9. If no time is mentioned, set time_info to null (meaning "now")
-10. CRITICAL: Match input against user's frequent items for better accuracy (e.g., "element" → "LMNT")
+10. Extract product names and brands as accurately as possible from user input
 11. Temperature: default to Fahrenheit unless Celsius is explicitly mentioned
 12. CRITICAL NUMBER FORMATTING:
     - "value" field: STRING with max 2 decimals, no trailing zeros ("10", "4.5", "125.75")
@@ -443,11 +441,9 @@ export async function parseTextWithGemini(text, apiKey, userHistory = []) {
   try {
     console.log('Parsing text with Gemini...');
 
-    // Extract frequently logged items
-    const frequentItems = extractFrequentItems(userHistory);
-    const userContextSection = frequentItems.length > 0
-      ? `\n\nUSER'S FREQUENTLY LOGGED ITEMS (use these for better accuracy):\n${frequentItems.map(({ item, count }) => `- "${item}" (logged ${count}x)`).join('\n')}\n\nIMPORTANT: When parsing input, check if it matches any of the user's frequent items. For example:\n- "element" likely refers to the "LMNT" brand if that's in their history\n- "chicken thigh" likely refers to their usual preparation if they log it often\n- Pay attention to flavor/variant keywords (citrus, lemonade, chocolate, vanilla, etc.) and match them accurately\n- Brand names and specific products should match their historical entries`
-      : '';
+    // Frequent items removed - user_product_registry now handles product recognition
+    // This reduces prompt tokens by ~200 and improves response time
+    const userContextSection = '';
 
     const systemPrompt = buildSystemPrompt(userContextSection);
 
@@ -540,7 +536,7 @@ Rules:
 6. For relative times ("30 min jog"), set relative_minutes_ago to indicate when it started
 7. For specific times (e.g., "I ate lunch at noon"), set specific_time to that time
 8. If no time is mentioned, set time_info to null (meaning "now")
-9. CRITICAL: Match input against user's frequent items for better accuracy (e.g., "element" → "LMNT")
+9. Extract product names and brands as accurately as possible from user input
 10. Temperature: default to Fahrenheit unless Celsius is explicitly mentioned
 
 Example outputs:
@@ -630,6 +626,12 @@ function parseAndValidateGeminiResponse(content) {
 
 /**
  * Extract frequently logged items from user history
+ *
+ * NOTE: This function is preserved for potential future analytics use but is NO LONGER
+ * used in Gemini prompts. Product recognition is now handled by user_product_registry
+ * with phonetic matching, which is more accurate and eliminates ~200 prompt tokens.
+ *
+ * @deprecated Use user_product_registry for product recognition instead
  */
 function extractFrequentItems(history) {
   const itemCounts = {};
