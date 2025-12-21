@@ -170,7 +170,7 @@ export default function HomeScreen() {
           parsed.event_type = registryMatch.event_type;
           parsed.event_data = registryMatch.event_type === 'food'
             ? { description: registryMatch.product_name }
-            : { name: registryMatch.product_name, dosage: '1 serving', units: 'serving' };
+            : { name: registryMatch.product_name, dosage: '1', units: 'serving' };
           parsed.confidence = 95;
           parsed.complete = true;
 
@@ -185,7 +185,7 @@ export default function HomeScreen() {
             parsed.event_type = fuzzyMatch.event_type;
             parsed.event_data = fuzzyMatch.event_type === 'food'
               ? { description: fuzzyMatch.product_name }
-              : { name: fuzzyMatch.product_name, dosage: '1 serving', units: 'serving' };
+              : { name: fuzzyMatch.product_name, dosage: '1', units: 'serving' };
             parsed.confidence = 95;
             parsed.complete = true;
 

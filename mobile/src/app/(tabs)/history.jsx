@@ -94,6 +94,29 @@ export default function HistoryScreen() {
     enabled: !!user?.id,
   });
 
+  // Filter and deduplicate events to ensure unique keys
+  const filteredEvents = React.useMemo(() => {
+    if (!data) return [];
+
+    // Filter by search query
+    const filtered = data.filter((event) => {
+      if (!searchQuery) return true;
+      const summary = getEventSummary(event).toLowerCase();
+      return summary.includes(searchQuery.toLowerCase());
+    });
+
+    // Deduplicate by ID to ensure unique keys
+    const seen = new Set();
+    return filtered.filter((event) => {
+      if (seen.has(event.id)) {
+        console.warn('Duplicate event ID detected:', event.id);
+        return false;
+      }
+      seen.add(event.id);
+      return true;
+    });
+  }, [data, searchQuery]);
+
   const handleEventPress = useCallback(
     (eventId) => {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -194,29 +217,6 @@ export default function HistoryScreen() {
   if (!fontsLoaded) {
     return null;
   }
-
-  // Filter and deduplicate events to ensure unique keys
-  const filteredEvents = React.useMemo(() => {
-    if (!data) return [];
-
-    // Filter by search query
-    const filtered = data.filter((event) => {
-      if (!searchQuery) return true;
-      const summary = getEventSummary(event).toLowerCase();
-      return summary.includes(searchQuery.toLowerCase());
-    });
-
-    // Deduplicate by ID to ensure unique keys
-    const seen = new Set();
-    return filtered.filter((event) => {
-      if (seen.has(event.id)) {
-        console.warn('Duplicate event ID detected:', event.id);
-        return false;
-      }
-      seen.add(event.id);
-      return true;
-    });
-  }, [data, searchQuery]);
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.background }}>
@@ -327,28 +327,6 @@ export default function HistoryScreen() {
           </View>
         </ScrollView>
       )}
-
-      {/* Search bar at bottom */}
-      <View
-        style={{
-          position: 'absolute',
-          bottom: 0,
-          left: 0,
-          right: 0,
-          backgroundColor: colors.background,
-          borderTopWidth: 1,
-          borderTopColor: colors.outline,
-          paddingHorizontal: 20,
-          paddingTop: 12,
-          paddingBottom: 12 + insets.bottom,
-        }}
-      >
-        <SearchBar
-          placeholder="Filter for..."
-          value={searchQuery}
-          onChangeText={setSearchQuery}
-        />
-      </View>
     </View>
   );
 }
