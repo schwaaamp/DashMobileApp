@@ -188,114 +188,19 @@ export async function parseAudioWithGemini(audioUri, apiKey, userHistory = []) {
 
     console.log(`Audio file type: ${mimeType}`);
 
-    // Frequent items removed - user_product_registry now handles product recognition
-    // This reduces prompt tokens by ~200 and improves response time
-    const userContextSection = '';
+    const systemPrompt = `Health event transcription and parsing assistant. Transcribe audio verbatim, then extract structured data.
 
-    const systemPrompt = `You are an AI assistant for a health tracking and wellness app. Users log various health events throughout their day to monitor their health, manage conditions like diabetes, and track wellness activities.
-
-CONTEXT: This app helps users track:
-- Food intake with nutritional information
-- Blood glucose readings
-- Insulin doses
-- Physical activities and exercise
-- Supplements and medications
-- Wellness activities (sauna, cold plunge, etc.)
-- Symptoms they're experiencing
-
-Users speak naturally and you need to transcribe and parse their input into structured data.
-
-CRITICAL: First transcribe the audio accurately, then parse the transcription into structured data.
-
-Return a COMPACT JSON object with these fields:
-- transcription: the exact text transcription of what the user said
-- event_type: one of [food, glucose, insulin, activity, supplement, sauna, medication, symptom]
-- event_data: object containing extracted fields based on event type
-- time_info: object with optional fields: { relative_minutes_ago: number, specific_time: "HH:MM", specific_date: "YYYY-MM-DD" } or null if referring to "now"
-- confidence: integer 0-100 indicating how confident you are in the parsing
-
-CRITICAL JSON FORMATTING RULES:
-1. For "value" field (insulin, glucose, etc.): Use STRING with max 2 decimal places
-   - Examples: "10", "4.5", "10.25", "125.75"
-   - NEVER: "10.0", "10.00", "10.000000..."
-   - Remove trailing zeros: "4.50" should be "4.5"
-   - Whole numbers have no decimal: "10" not "10.0"
-
-2. For "duration" field: Use INTEGER (whole minutes only)
-   - Examples: 30, 45, 120
-   - NEVER: 30.0, 30.5, "30"
-
-3. For "temperature" field: Use INTEGER (whole degrees only)
-   - Examples: 180, 185, 98
-   - NEVER: 180.0, 180.5, "180"
-
-4. For "relative_minutes_ago": Use INTEGER (whole minutes)
-   - Examples: 30, 60, 120
-
-5. For "confidence": Use INTEGER 0-100
-   - Examples: 95, 85, 100
-
-Event type schemas:
-${JSON.stringify(EVENT_TYPES, null, 2)}
-${userContextSection}
+Event types: food, glucose, insulin, activity, supplement, sauna, medication, symptom
 
 Rules:
-1. Always transcribe exactly what you hear first
-2. Identify the most appropriate event_type from the transcription
-3. Extract all available information
-4. Use reasonable defaults for units (mg/dL for glucose, units for insulin, minutes for duration, etc.)
-5. For food, try to extract nutritional info if mentioned
-6. For time ranges (e.g., "2:42pm to 3:05pm"), calculate the duration in minutes and set time_info to the START time
-7. For relative times ("30 min jog"), set relative_minutes_ago to indicate when it started
-8. For specific times (e.g., "I ate lunch at noon"), set specific_time to that time
-9. If no time is mentioned, set time_info to null (meaning "now")
-10. Extract product names and brands as accurately as possible from user input
-11. Temperature: default to Fahrenheit unless Celsius is explicitly mentioned
-12. CRITICAL NUMBER FORMATTING:
-    - "value" field: STRING with max 2 decimals, no trailing zeros ("10", "4.5", "125.75")
-    - "duration", "temperature", "relative_minutes_ago", "confidence": INTEGER (no decimals, no quotes)
-    - Remove all trailing zeros from decimal values
+- Transcribe exactly what you hear first
+- For time ranges (e.g., "2-2:30pm"), calculate duration and set specific_time to start
+- For relative times (e.g., "30 min ago"), use relative_minutes_ago
+- No time mentioned: set time_info to null
+- Defaults: glucose in mg/dL, insulin in units, temperature in Fahrenheit
+- Extract product names and brands accurately
 
-Example outputs:
-
-Input: "Log 6 units of basal insulin"
-Output: {
-  "transcription": "Log 6 units of basal insulin",
-  "event_type": "insulin",
-  "event_data": {
-    "value": "6",
-    "units": "units",
-    "insulin_type": "basal"
-  },
-  "time_info": null,
-  "confidence": 95
-}
-
-Input: "Took 4.5 units of rapid insulin"
-Output: {
-  "transcription": "Took 4.5 units of rapid insulin",
-  "event_type": "insulin",
-  "event_data": {
-    "value": "4.5",
-    "units": "units",
-    "insulin_type": "rapid"
-  },
-  "time_info": null,
-  "confidence": 95
-}
-
-Input: "Blood glucose 125.75"
-Output: {
-  "transcription": "Blood glucose 125.75",
-  "event_type": "glucose",
-  "event_data": {
-    "value": "125.75",
-    "units": "mg/dL"
-  },
-  "time_info": null,
-  "confidence": 95
-}
-
+Example:
 Input: "Sauna from 2:42pm to 3:05pm"
 Output: {
   "transcription": "Sauna from 2:42pm to 3:05pm",
@@ -441,11 +346,7 @@ export async function parseTextWithGemini(text, apiKey, userHistory = []) {
   try {
     console.log('Parsing text with Gemini...');
 
-    // Frequent items removed - user_product_registry now handles product recognition
-    // This reduces prompt tokens by ~200 and improves response time
-    const userContextSection = '';
-
-    const systemPrompt = buildSystemPrompt(userContextSection);
+    const systemPrompt = buildSystemPrompt();
 
     const requestBody = {
       contents: [{
@@ -501,58 +402,21 @@ export async function parseTextWithGemini(text, apiKey, userHistory = []) {
 }
 
 /**
- * Build system prompt for Gemini
+ * Build system prompt for Gemini (optimized for minimal tokens)
  */
-function buildSystemPrompt(userContextSection) {
-  return `You are an AI assistant for a health tracking and wellness app. Users log various health events throughout their day to monitor their health, manage conditions like diabetes, and track wellness activities.
+function buildSystemPrompt() {
+  return `Health event parsing assistant. Extract structured data from user input.
 
-CONTEXT: This app helps users track:
-- Food intake with nutritional information
-- Blood glucose readings
-- Insulin doses
-- Physical activities and exercise
-- Supplements and medications
-- Wellness activities (sauna, cold plunge, etc.)
-- Symptoms they're experiencing
-
-Users speak naturally and you need to parse their input into structured data.
-
-Return a JSON object with these fields:
-- event_type: one of [food, glucose, insulin, activity, supplement, sauna, medication, symptom]
-- event_data: object containing extracted fields based on event type
-- time_info: object with optional fields: { relative_minutes_ago: number, specific_time: "HH:MM", specific_date: "YYYY-MM-DD" } or null if referring to "now"
-- confidence: number 0-100 indicating how confident you are in the parsing (100=certain, 50=moderate, 0=guessing)
-
-Event type schemas:
-${JSON.stringify(EVENT_TYPES, null, 2)}
-${userContextSection}
+Event types: food, glucose, insulin, activity, supplement, sauna, medication, symptom
 
 Rules:
-1. Identify the most appropriate event_type from the input
-2. Extract all available information
-3. Use reasonable defaults for units (mg/dL for glucose, units for insulin, minutes for duration, etc.)
-4. For food, try to extract nutritional info if mentioned
-5. For time ranges (e.g., "2:42pm to 3:05pm"), calculate the duration in minutes and set time_info to the START time
-6. For relative times ("30 min jog"), set relative_minutes_ago to indicate when it started
-7. For specific times (e.g., "I ate lunch at noon"), set specific_time to that time
-8. If no time is mentioned, set time_info to null (meaning "now")
-9. Extract product names and brands as accurately as possible from user input
-10. Temperature: default to Fahrenheit unless Celsius is explicitly mentioned
+- For time ranges (e.g., "2-2:30pm"), calculate duration and set specific_time to start
+- For relative times (e.g., "30 min ago"), use relative_minutes_ago
+- No time mentioned: set time_info to null
+- Defaults: glucose in mg/dL, insulin in units, temperature in Fahrenheit
+- Extract product names and brands accurately
 
-Example outputs:
-
-Input: "Log 6 units of basal insulin"
-Output: {
-  "event_type": "insulin",
-  "event_data": {
-    "value": 6,
-    "units": "units",
-    "insulin_type": "basal"
-  },
-  "time_info": null,
-  "confidence": 95
-}
-
+Example:
 Input: "Sauna from 2:42pm to 3:05pm"
 Output: {
   "event_type": "sauna",
@@ -562,17 +426,6 @@ Output: {
     "temperature_units": "F"
   },
   "time_info": { "specific_time": "14:42" },
-  "confidence": 90
-}
-
-Input: "30 minute jog"
-Output: {
-  "event_type": "activity",
-  "event_data": {
-    "activity_type": "jog",
-    "duration": 30
-  },
-  "time_info": { "relative_minutes_ago": 30 },
   "confidence": 90
 }`;
 }
