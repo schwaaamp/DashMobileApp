@@ -15,6 +15,167 @@ import { supabase } from './supabaseClient';
 import * as FileSystem from 'expo-file-system/legacy';
 
 /**
+ * Normalize a product name/brand for matching
+ * Lowercases, removes special characters, normalizes whitespace
+ *
+ * @param {string} text - Product name or brand
+ * @returns {string} Normalized text for comparison
+ */
+export function normalizeProductKey(text) {
+  if (!text) return '';
+
+  return text
+    .toLowerCase()
+    .replace(/[()'"]/g, '')        // Remove parentheses and quotes
+    .replace(/[^a-z0-9\s]/g, ' ')  // Replace special chars with space
+    .replace(/\s+/g, ' ')          // Normalize multiple spaces
+    .trim();
+}
+
+/**
+ * Find a product in the catalog by barcode or name/brand
+ *
+ * Priority:
+ * 1. Exact barcode match (if barcode provided)
+ * 2. Text search on brand + product name
+ *
+ * @param {Object} params - Search parameters
+ * @param {string} params.barcode - Optional barcode
+ * @param {string} params.productName - Product name from detection
+ * @param {string} params.brand - Brand name from detection
+ * @returns {Promise<Object|null>} Matching product with matchMethod or null
+ */
+export async function findCatalogMatch({ barcode, productName, brand }) {
+  try {
+    // Step 1: Try barcode match first (fastest, most accurate)
+    if (barcode) {
+      const { data: barcodeMatch, error } = await supabase
+        .from('product_catalog')
+        .select('*')
+        .eq('barcode', barcode)
+        .single();
+
+      if (barcodeMatch && !error) {
+        return {
+          ...barcodeMatch,
+          matchMethod: 'barcode'
+        };
+      }
+    }
+
+    // Step 2: Fall back to text search
+    const searchQuery = brand ? `${brand} ${productName}` : productName;
+
+    if (!searchQuery || searchQuery.trim().length === 0) {
+      return null;
+    }
+
+    // Normalize for search
+    const normalizedQuery = normalizeProductKey(searchQuery);
+
+    // Use full-text search with brand normalization
+    // Handle "NOW" matching "NOW Foods" by searching both ways
+    const { data: textMatches, error: searchError } = await supabase
+      .from('product_catalog')
+      .select('*')
+      .or(`product_key.ilike.%${normalizedQuery}%,product_name.ilike.%${productName}%`)
+      .order('times_logged', { ascending: false })
+      .limit(5);
+
+    if (searchError) {
+      console.error('[findCatalogMatch] Search error:', searchError);
+      return null;
+    }
+
+    if (!textMatches || textMatches.length === 0) {
+      return null;
+    }
+
+    // Return best match
+    const bestMatch = textMatches[0];
+
+    return {
+      ...bestMatch,
+      matchMethod: 'text_search'
+    };
+
+  } catch (error) {
+    console.error('[findCatalogMatch] Error:', error);
+    return null;
+  }
+}
+
+/**
+ * Add a new product to the catalog
+ *
+ * @param {Object} productData - Product data from nutrition label extraction
+ * @param {string} userId - User who submitted the product
+ * @returns {Promise<{success: boolean, product?: Object, error?: string}>}
+ */
+export async function addProductToCatalog(productData, userId) {
+  try {
+    const {
+      product_name,
+      brand,
+      product_type,
+      serving_quantity,
+      serving_unit,
+      serving_weight_grams,
+      micros,
+      active_ingredients,
+      barcode,
+      photo_front_url,
+      photo_label_url
+    } = productData;
+
+    // Generate product_key for duplicate detection
+    const product_key = normalizeProductKey(`${brand || ''} ${product_name}`);
+
+    const { data, error } = await supabase
+      .from('product_catalog')
+      .insert({
+        product_name,
+        brand,
+        product_type,
+        product_key,
+        serving_quantity,
+        serving_unit,
+        serving_weight_grams,
+        micros: micros || {},
+        active_ingredients: active_ingredients || [],
+        barcode,
+        photo_front_url,
+        photo_label_url,
+        submitted_by_user_id: userId,
+        verification_status: 'user_verified',
+        times_logged: 1
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error('[addProductToCatalog] Insert error:', error);
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+
+    return {
+      success: true,
+      product: data
+    };
+
+  } catch (error) {
+    console.error('[addProductToCatalog] Error:', error);
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+}
+
+/**
  * Search product catalog (does NOT call external APIs)
  *
  * Uses full-text search with popularity ranking.

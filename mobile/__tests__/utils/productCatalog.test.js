@@ -13,11 +13,11 @@ import {
   detectBarcode
 } from '@/utils/productCatalog';
 import { supabase } from '@/utils/supabaseClient';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 
 // Mock dependencies
 jest.mock('@/utils/supabaseClient');
-jest.mock('expo-file-system');
+jest.mock('expo-file-system/legacy');
 jest.mock('@/utils/productRegistry', () => ({
   normalizeProductKey: jest.fn((name) => name.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim()),
   addToUserRegistry: jest.fn(() => Promise.resolve())
@@ -237,6 +237,12 @@ describe('Product Catalog', () => {
   });
 
   describe('extractNutritionLabel', () => {
+    beforeEach(() => {
+      // Mock FileSystem for base64 encoding
+      FileSystem.readAsStringAsync = jest.fn(() => Promise.resolve('base64encodedimage'));
+      FileSystem.EncodingType = { Base64: 'base64' };
+    });
+
     it('should extract nutrition data from clear label photo', async () => {
       const mockGeminiResponse = {
         candidates: [{
@@ -714,6 +720,12 @@ describe('Product Catalog', () => {
   });
 
   describe('detectBarcode', () => {
+    beforeEach(() => {
+      // Mock FileSystem for base64 encoding
+      FileSystem.readAsStringAsync = jest.fn(() => Promise.resolve('base64encodedimage'));
+      FileSystem.EncodingType = { Base64: 'base64' };
+    });
+
     it('should detect UPC barcodes', async () => {
       global.fetch = jest.fn(() =>
         Promise.resolve({
@@ -736,7 +748,7 @@ describe('Product Catalog', () => {
 
       const result = await detectBarcode('/path/to/photo.jpg', 'test-api-key');
 
-      expect(result).not.toBeNull();
+      expect(result.success).toBe(true);
       expect(result.barcode).toBe('012345678901');
       expect(result.format).toBe('UPC-A');
       expect(result.confidence).toBe(95);
@@ -764,6 +776,7 @@ describe('Product Catalog', () => {
 
       const result = await detectBarcode('/path/to/photo.jpg', 'test-api-key');
 
+      expect(result.success).toBe(true);
       expect(result.barcode).toBe('5901234123457');
       expect(result.format).toBe('EAN-13');
     });
@@ -790,7 +803,8 @@ describe('Product Catalog', () => {
 
       const result = await detectBarcode('/path/to/apple.jpg', 'test-api-key');
 
-      expect(result).toBeNull();
+      expect(result.success).toBe(false);
+      expect(result.barcode).toBeNull();
     });
 
     it('should handle Gemini API errors', async () => {
@@ -803,7 +817,8 @@ describe('Product Catalog', () => {
 
       const result = await detectBarcode('/path/to/photo.jpg', 'test-api-key');
 
-      expect(result).toBeNull();
+      expect(result.success).toBe(false);
+      expect(result.barcode).toBeNull();
     });
   });
 });

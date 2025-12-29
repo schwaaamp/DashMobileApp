@@ -13,8 +13,9 @@
  */
 
 import { analyzeSupplementPhoto, uploadPhotoToSupabase, generateFollowUpQuestion } from './photoAnalysis';
-import { lookupByBarcode, searchProductCatalog, incrementProductUsage, detectBarcode } from './productCatalog';
+import { lookupByBarcode, searchProductCatalog, incrementProductUsage, detectBarcode, addProductToCatalog } from './productCatalog';
 import { createAuditRecord, updateAuditStatus, createVoiceEvent } from './voiceEventParser';
+import { calculateConsumedNutrients } from './nutrientCalculation';
 import { supabase } from './supabaseClient';
 
 /**
@@ -475,4 +476,48 @@ function formatServingSize(servingSize) {
   }
 
   return null;
+}
+
+/**
+ * Build event data for supplement/medication/food with calculated nutrients
+ *
+ * @param {Object} catalogProduct - Product from product_catalog (or null if no match)
+ * @param {number} amountConsumed - Number of units consumed
+ * @param {boolean} isManualOverride - Whether user edited calculated values
+ * @param {Object} userEditedNutrients - User-edited nutrients (if isManualOverride)
+ * @param {Object} detectedInfo - Detected info from Gemini (used if no catalog match)
+ * @returns {Object} Event data for voice_events.event_data
+ */
+export function buildSupplementEventData(
+  catalogProduct,
+  amountConsumed,
+  isManualOverride = false,
+  userEditedNutrients = null,
+  detectedInfo = null
+) {
+  // No catalog match - use legacy format
+  if (!catalogProduct) {
+    return {
+      product_catalog_id: null,
+      name: detectedInfo?.name || 'Unknown',
+      brand: detectedInfo?.brand || null,
+      dosage: amountConsumed.toString(),
+      units: detectedInfo?.form || 'capsule'
+    };
+  }
+
+  // Calculate nutrients based on amount consumed
+  const calculatedNutrients = isManualOverride && userEditedNutrients
+    ? userEditedNutrients
+    : calculateConsumedNutrients(catalogProduct, amountConsumed);
+
+  return {
+    product_catalog_id: catalogProduct.id,
+    name: catalogProduct.product_name,
+    brand: catalogProduct.brand,
+    amount_consumed: amountConsumed,
+    unit: catalogProduct.serving_unit,
+    calculated_nutrients: calculatedNutrients,
+    is_manual_override: isManualOverride
+  };
 }
