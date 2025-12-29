@@ -132,7 +132,85 @@ function reclassifyFoodToSupplement(description) {
     };
   }
 
+  // Collagen
+  if (/\bcollagen\b/i.test(lowerDesc)) {
+    return {
+      name: description,
+      dosage: '1 scoop',
+      units: 'scoop'
+    };
+  }
+
+  // Probiotics
+  if (/\bprobiotic\b/i.test(lowerDesc)) {
+    return {
+      name: description,
+      dosage: '1 capsule',
+      units: 'capsule'
+    };
+  }
+
+  // Fish oil / Omega-3
+  if (/\b(fish\s*oil|omega[-\s]?3)\b/i.test(lowerDesc)) {
+    return {
+      name: description,
+      dosage: '1 softgel',
+      units: 'softgel'
+    };
+  }
+
   return null;
+}
+
+/**
+ * Check if a supplement should be reclassified as medication
+ * This handles cases where pharmaceuticals are incorrectly classified as supplements
+ *
+ * @param {string} name - The supplement name from Claude
+ * @returns {boolean} - True if this should be medication instead
+ */
+function isMedicationNotSupplement(name) {
+  if (!name) return false;
+
+  const lowerName = name.toLowerCase();
+
+  // Common OTC medication brands
+  const otcMedications = [
+    'advil', 'motrin', 'ibuprofen',
+    'tylenol', 'acetaminophen', 'paracetamol',
+    'aspirin', 'bayer',
+    'aleve', 'naproxen',
+    'excedrin',
+    'nyquil', 'dayquil',
+    'benadryl', 'diphenhydramine',
+    'zyrtec', 'claritin', 'allegra',
+    'pepto', 'bismol',
+    'tums', 'antacid'
+  ];
+
+  // Common prescription medications
+  const rxMedications = [
+    'metformin',
+    'lisinopril',
+    'atorvastatin', 'lipitor',
+    'levothyroxine', 'synthroid',
+    'amlodipine',
+    'omeprazole', 'prilosec',
+    'losartan',
+    'gabapentin',
+    'sertraline', 'zoloft',
+    'simvastatin',
+    'montelukast', 'singulair'
+  ];
+
+  // Check if name matches any medication
+  for (const med of [...otcMedications, ...rxMedications]) {
+    if (lowerName.includes(med)) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 /**
@@ -401,6 +479,21 @@ Output: {"event_type": "supplement", "event_data": {"name": "NOW Vitamin D 5000 
             units: 'serving'
           };
         }
+      }
+    }
+
+    // Post-processing: Reclassify supplements that are actually medications
+    // This handles cases where pharmaceuticals are incorrectly classified as supplements
+    if (parsed.event_type === 'supplement' && parsed.event_data?.name) {
+      if (isMedicationNotSupplement(parsed.event_data.name)) {
+        await Logger.info('parsing', 'Reclassified supplement as medication (pattern match)', {
+          original_name: parsed.event_data.name,
+          original_type: 'supplement',
+          new_type: 'medication'
+        }, userId);
+
+        parsed.event_type = 'medication';
+        // Keep the same event_data structure (medication and supplement have same schema)
       }
     }
 

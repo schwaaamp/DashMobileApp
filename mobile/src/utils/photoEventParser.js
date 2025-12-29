@@ -1,308 +1,478 @@
 /**
  * Photo Event Parser
- * Handles end-to-end processing of photo-based supplement logging
- * Includes database lookup for serving sizes and multi-item support
+ *
+ * Orchestrates photo capture → event creation flow with automatic catalog building.
+ *
+ * Flow:
+ * 1. User takes photo of supplement/food/medication bottle
+ * 2. Attempt barcode detection (instant match)
+ * 3. If no barcode or no match, use Gemini Vision OCR
+ * 4. Search product catalog for match
+ * 5. If found: ask quantity, create event
+ * 6. If not found: 2-photo flow (front + nutrition), add to catalog, then create event
  */
 
 import { analyzeSupplementPhoto, uploadPhotoToSupabase, generateFollowUpQuestion } from './photoAnalysis';
-import { searchAllProducts } from './productSearch';
+import { lookupByBarcode, searchProductCatalog, incrementProductUsage, detectBarcode } from './productCatalog';
 import { createAuditRecord, updateAuditStatus, createVoiceEvent } from './voiceEventParser';
 import { supabase } from './supabaseClient';
 
 /**
- * Look up product serving size from Open Food Facts / USDA databases
- * @param {string} productName - Product name
- * @param {string} brand - Brand name
- * @param {string} usdaApiKey - USDA API key
- * @returns {Promise<Object|null>} Serving size info or null if not found
+ * Find product in catalog by barcode or name
+ * Barcode-first matching for instant recognition
+ *
+ * @param {string} photoUri - Photo URI for barcode detection
+ * @param {string} productName - Product name from Gemini Vision
+ * @param {string} brand - Brand name from Gemini Vision
+ * @param {string} userId - User ID
+ * @param {string} geminiApiKey - Gemini API key
+ * @returns {Promise<Object|null>} Catalog match or null
  */
-async function lookupProductServingSize(productName, brand, usdaApiKey) {
+async function findCatalogMatch(photoUri, productName, brand, userId, geminiApiKey) {
   try {
-    // Search with brand + product name for best match
-    const searchQuery = `${brand} ${productName}`;
-    console.log(`Looking up serving size for: "${searchQuery}"`);
+    // Step 1: Attempt barcode detection (fastest path)
+    console.log('[photoEventParser] Attempting barcode detection...');
+    const barcodeResult = await detectBarcode(photoUri, geminiApiKey);
 
-    const products = await searchAllProducts(searchQuery, usdaApiKey);
+    if (barcodeResult.success && barcodeResult.barcode) {
+      console.log(`[photoEventParser] Barcode detected: ${barcodeResult.barcode}`);
 
-    if (!products || products.length === 0) {
-      console.log('No products found in database');
+      // Look up by barcode
+      const barcodeMatch = await lookupByBarcode(barcodeResult.barcode, userId);
+
+      if (barcodeMatch) {
+        console.log('[photoEventParser] ✓ Barcode match found in catalog!');
+        return {
+          ...barcodeMatch,
+          matchMethod: 'barcode'
+        };
+      }
+    }
+
+    // Step 2: Fall back to text search
+    console.log('[photoEventParser] No barcode match, searching by text...');
+    const searchQuery = brand ? `${brand} ${productName}` : productName;
+    const searchResults = await searchProductCatalog(searchQuery, userId, 5);
+
+    if (searchResults.length === 0) {
+      console.log('[photoEventParser] No catalog match found');
       return null;
     }
 
-    // Take the highest confidence match
-    const bestMatch = products[0];
+    // Return best match (highest ranked)
+    const bestMatch = searchResults[0];
 
-    if (bestMatch.confidence < 60) {
-      console.log(`Low confidence match (${bestMatch.confidence}%), skipping`);
-      return null;
+    // Confidence threshold: only return if confidence is reasonable
+    if (bestMatch.search_rank && bestMatch.search_rank > 0.3) {
+      console.log(`[photoEventParser] ✓ Text match found: ${bestMatch.product_name}`);
+      return {
+        ...bestMatch,
+        matchMethod: 'text_search'
+      };
     }
 
-    console.log(`Found match: ${bestMatch.name} (confidence: ${bestMatch.confidence}%)`);
-
-    return {
-      productId: bestMatch.id,
-      source: bestMatch.source,
-      name: bestMatch.name,
-      brand: bestMatch.brand,
-      servingSize: bestMatch.servingSize,
-      nutrients: bestMatch.nutrients,
-      confidence: bestMatch.confidence
-    };
+    console.log('[photoEventParser] Match confidence too low');
+    return null;
   } catch (error) {
-    console.error('Error looking up product serving size:', error);
+    console.error('[photoEventParser] Error finding catalog match:', error);
     return null;
   }
 }
 
 /**
- * Calculate dosage from quantity taken and serving size info
+ * Calculate dosage from quantity taken and catalog serving size
  * @param {number} quantityTaken - Number of capsules/tablets taken
- * @param {string} servingSize - Serving size from database (e.g., "2 capsules")
- * @param {Object} nutrients - Nutrients object from database
- * @returns {Object} Calculated dosage info
+ * @param {Object} servingSize - Serving size from catalog {quantity, unit, grams}
+ * @param {Object} nutrients - Nutrients JSONB from catalog
+ * @returns {Object} Calculated dosage info {dosage, units}
  */
 function calculateDosageFromQuantity(quantityTaken, servingSize, nutrients) {
   try {
-    // Parse serving size to get number of capsules per serving
-    const servingSizeMatch = servingSize?.match(/(\d+)\s*(capsule|tablet|softgel|gummies)/i);
-    const capsulesPerServing = servingSizeMatch ? parseInt(servingSizeMatch[1]) : 1;
+    if (!servingSize || !nutrients) {
+      return { dosage: quantityTaken.toString(), units: 'capsules' };
+    }
 
-    console.log(`Capsules per serving: ${capsulesPerServing}`);
-    console.log(`Quantity taken: ${quantityTaken}`);
+    const servingQuantity = servingSize.quantity || 1;
 
-    // Find the primary nutrient (usually the one with highest value)
-    let primaryNutrient = null;
-    let primaryValue = 0;
-    let primaryUnit = 'mg';
+    console.log(`[photoEventParser] Calculating dosage: ${quantityTaken} taken / ${servingQuantity} per serving`);
 
-    if (nutrients) {
-      // Check common nutrients in order of likelihood
-      const nutrientKeys = Object.keys(nutrients);
-      for (const key of nutrientKeys) {
-        const value = nutrients[key];
-        if (value && value > primaryValue) {
-          primaryValue = value;
-          primaryNutrient = key;
-        }
+    // Calculate dosage multiplier
+    const multiplier = quantityTaken / servingQuantity;
+
+    // Find primary nutrient (supplement-specific nutrients take priority)
+    const priorityNutrients = [
+      'magnesium', 'vitamin_d', 'vitamin_c', 'calcium', 'zinc',
+      'iron', 'omega_3', 'protein', 'caffeine'
+    ];
+
+    for (const nutrient of priorityNutrients) {
+      if (nutrients[nutrient] && nutrients[nutrient] > 0) {
+        const dosage = Math.round(nutrients[nutrient] * multiplier);
+        console.log(`[photoEventParser] Calculated ${nutrient}: ${dosage}mg`);
+        return {
+          dosage: dosage.toString(),
+          units: 'mg'
+        };
       }
     }
 
-    if (!primaryValue) {
-      console.log('No nutrient data available for dosage calculation');
-      return {
-        dosage: null,
-        units: null,
-        quantityTaken: `${quantityTaken} ${servingSizeMatch?.[2] || 'capsules'}`
-      };
-    }
-
-    // Calculate actual dosage
-    const actualDosage = (quantityTaken / capsulesPerServing) * primaryValue;
-
-    console.log(`Calculated dosage: ${actualDosage}${primaryUnit} (${primaryNutrient})`);
-
+    // Fallback: use quantity
     return {
-      dosage: Math.round(actualDosage).toString(),
-      units: primaryUnit,
-      nutrient: primaryNutrient,
-      quantityTaken: `${quantityTaken} ${servingSizeMatch?.[2] || 'capsules'}`
+      dosage: quantityTaken.toString(),
+      units: servingSize.unit || 'capsules'
     };
   } catch (error) {
-    console.error('Error calculating dosage:', error);
+    console.error('[photoEventParser] Error calculating dosage:', error);
     return {
-      dosage: null,
-      units: null,
-      quantityTaken: `${quantityTaken} capsules`
+      dosage: quantityTaken.toString(),
+      units: 'capsules'
     };
   }
 }
 
 /**
- * Main processing function for photo-based supplement logging
- * Supports MULTIPLE supplements in one photo
+ * Main photo → event processing function
+ * Orchestrates: photo upload → Gemini analysis → catalog lookup → event creation
  *
  * @param {string} photoPath - Local photo URI
  * @param {string} userId - User ID
  * @param {string} apiKey - Gemini API key
  * @param {string} captureMethod - Capture method (default: 'photo')
- * @returns {Promise<Object>} Processing result with items array
+ * @returns {Promise<Object>} Processing result with event data and follow-up question
  */
 export async function processPhotoInput(photoPath, userId, apiKey, captureMethod = 'photo') {
   try {
-    console.log('Processing photo input...');
+    console.log('[photoEventParser] Processing photo for event creation...');
 
     // Step 1: Upload photo to Supabase Storage
-    console.log('Uploading photo to Supabase Storage...');
+    console.log('[photoEventParser] Uploading photo to Supabase Storage...');
     const { url: photoUrl, error: uploadError } = await uploadPhotoToSupabase(photoPath, userId);
 
     if (uploadError) {
-      console.warn('Photo upload failed, continuing without URL:', uploadError);
+      console.error('[photoEventParser] Photo upload failed:', uploadError);
+      return {
+        success: false,
+        error: `Failed to upload photo: ${uploadError}`
+      };
     }
+    console.log('[photoEventParser] Photo uploaded:', photoUrl);
 
-    // Step 2: Analyze photo with Gemini Vision
-    console.log('Analyzing photo with Gemini Vision...');
+    // Step 2: Analyze photo with Gemini Vision (multi-item detection)
+    console.log('[photoEventParser] Analyzing photo with Gemini Vision...');
     const analysis = await analyzeSupplementPhoto(photoPath, userId, apiKey);
 
     if (!analysis.success || analysis.items.length === 0) {
-      throw new Error(analysis.error || 'No supplements detected in photo');
+      console.error('[photoEventParser] Photo analysis failed:', analysis.error);
+      return {
+        success: false,
+        error: analysis.error || 'Could not identify any products in the photo'
+      };
     }
 
-    console.log(`Detected ${analysis.items.length} supplement(s)`);
+    console.log(`[photoEventParser] Detected ${analysis.items.length} item(s):`, analysis.items);
 
-    // Step 3: For each item, look up serving size in databases
-    const itemsWithServingInfo = [];
+    // Step 3: Process FIRST item only (multi-item will be Phase 6)
+    const detectedItem = analysis.items[0];
+    const { name, brand, form, event_type } = detectedItem;
 
-    for (const item of analysis.items) {
-      console.log(`Looking up serving info for: ${item.brand} ${item.name}`);
+    // Step 4: Search product catalog for match (barcode-first, then text)
+    console.log('[photoEventParser] Searching product catalog...');
+    const catalogMatch = await findCatalogMatch(photoPath, name, brand, userId, apiKey);
 
-      const usdaApiKey = process.env.EXPO_PUBLIC_USDA_API_KEY;
-      const servingInfo = await lookupProductServingSize(item.name, item.brand, usdaApiKey);
+    let productCatalogId = null;
+    let servingSize = null;
+    let nutrients = null;
 
-      // Generate follow-up question
-      const followUpQuestion = generateFollowUpQuestion(item, servingInfo);
+    if (catalogMatch) {
+      console.log('[photoEventParser] ✓ Found catalog match:', catalogMatch.product_name);
+      productCatalogId = catalogMatch.id;
+      servingSize = catalogMatch.serving_size;
+      nutrients = catalogMatch.nutrients;
 
-      itemsWithServingInfo.push({
-        ...item,
-        servingInfo,
-        followUpQuestion,
-        needsManualDosage: !servingInfo // Flag for items without database match
-      });
+      // Increment usage counter
+      await incrementProductUsage(productCatalogId);
+    } else {
+      console.log('[photoEventParser] No catalog match found. Will create event without catalog link.');
+      // Future: Trigger 2-photo flow to add to catalog
     }
 
-    // Step 4: Create audit record with ALL items in metadata
-    console.log('Creating audit record...');
+    // Step 5: Create audit record
+    console.log('[photoEventParser] Creating audit record...');
     const auditRecord = await createAuditRecord(
       userId,
-      `Photo: ${analysis.items.length} supplement(s)`,
-      analysis.items[0].event_type, // Use first item's type for record
+      `[Photo: ${name}${brand ? ` by ${brand}` : ''}]`, // Descriptive text for photo events
+      event_type, // eventType
       null, // value
       null, // units
-      'gemini-2.5-flash',
+      'gemini-2.0-flash-exp', // nlpModel
       {
-        capture_method: 'photo',
         photo_url: photoUrl,
+        detected_items: analysis.items,
         confidence: analysis.confidence,
-        items_detected: analysis.items.length,
-        detected_items: itemsWithServingInfo,
-        gemini_model: 'gemini-2.5-flash'
+        capture_method: captureMethod,
+        gemini_model: 'gemini-2.0-flash-exp',
+        catalog_match: catalogMatch ? {
+          product_id: productCatalogId,
+          product_name: catalogMatch.product_name,
+          brand: catalogMatch.brand,
+          match_method: catalogMatch.matchMethod
+        } : null
       }
     );
 
-    // Step 5: Return for confirmation screen
-    // The confirmation screen will collect quantity for each item
+    const auditId = auditRecord.id;
+    console.log('[photoEventParser] Audit record created:', auditId);
+
+    // Step 6: Build event data structure
+    const eventData = buildEventDataFromDetection(
+      detectedItem,
+      productCatalogId,
+      servingSize,
+      nutrients
+    );
+
+    // Step 7: Generate follow-up question for quantity
+    const followUpQuestion = generateQuantityQuestion(name, form || 'capsules');
+
+    // Step 8: Return incomplete event for confirmation screen
     return {
       success: true,
-      items: itemsWithServingInfo,
-      auditId: auditRecord.id,
-      photoUrl: photoUrl || null,
-      complete: false // Always needs user input for quantity
+      parsed: {
+        event_type,
+        event_data: eventData,
+        confidence: analysis.confidence,
+        complete: false
+      },
+      auditId,
+      photoUrl,
+      complete: false,
+      missingFields: ['quantity'],
+      followUpQuestion,
+      detectedItem,
+      catalogMatch: catalogMatch || null
     };
+
   } catch (error) {
-    console.error('Error processing photo input:', error);
+    console.error('[photoEventParser] Error processing photo:', error);
     return {
       success: false,
-      error: error.message,
-      items: []
+      error: error.message || 'Failed to process photo'
     };
   }
 }
 
 /**
- * Handle user's response to follow-up question
- * Creates a voice_events entry for the supplement
+ * Handle user's quantity response from follow-up question
  *
  * @param {string} auditId - Audit record ID
- * @param {number} itemIndex - Index of item in detected_items array
- * @param {string} response - User's answer (quantity taken)
+ * @param {string} quantityResponse - User's answer (e.g., "2", "1 capsule", "3 pills")
  * @param {string} userId - User ID
- * @returns {Promise<Object>} Result with created event
+ * @returns {Promise<{success: boolean, event: Object, complete: boolean}>}
  */
-export async function handleFollowUpResponse(auditId, itemIndex, response, userId) {
+export async function handleFollowUpResponse(auditId, quantityResponse, userId) {
   try {
-    console.log(`Handling follow-up response for item ${itemIndex}: "${response}"`);
+    console.log('[photoEventParser] Processing quantity response:', quantityResponse);
 
-    // Step 1: Fetch original audit record
-    const { data: auditRecord, error: auditError } = await supabase
+    // Parse quantity from user input
+    const quantity = parseQuantity(quantityResponse);
+
+    if (!quantity || quantity <= 0) {
+      return {
+        success: false,
+        error: 'Could not parse quantity from response'
+      };
+    }
+
+    console.log('[photoEventParser] Parsed quantity:', quantity);
+
+    // Fetch audit record to get original detection data
+    const { data: auditRecord, error: fetchError } = await supabase
       .from('voice_records_audit')
       .select('*')
       .eq('id', auditId)
       .single();
 
-    if (auditError || !auditRecord) {
-      throw new Error('Audit record not found');
+    if (fetchError || !auditRecord) {
+      return {
+        success: false,
+        error: 'Could not find original audit record'
+      };
     }
 
-    // Step 2: Get the specific item from metadata
-    const detectedItems = auditRecord.nlp_metadata?.detected_items || [];
-    if (itemIndex >= detectedItems.length) {
-      throw new Error('Invalid item index');
+    const metadata = auditRecord.nlp_metadata || {};
+    const detectedItems = metadata.detected_items || [];
+    const detectedItem = detectedItems[0]; // First item
+    const catalogMatch = metadata.catalog_match;
+
+    if (!detectedItem) {
+      return {
+        success: false,
+        error: 'Missing detected item data in audit record'
+      };
     }
 
-    const item = detectedItems[itemIndex];
+    // Calculate dosage based on quantity and catalog serving size
+    let dosage = null;
+    let units = null;
 
-    // Step 3: Parse user's answer (should be a number)
-    const quantityTaken = parseInt(response);
-    if (isNaN(quantityTaken) || quantityTaken <= 0) {
-      throw new Error('Invalid quantity - please enter a positive number');
+    if (catalogMatch && catalogMatch.product_id) {
+      // Fetch full catalog entry to get serving size and nutrients
+      const { data: catalogProduct } = await supabase
+        .from('product_catalog')
+        .select('*')
+        .eq('id', catalogMatch.product_id)
+        .single();
+
+      if (catalogProduct && catalogProduct.serving_size && catalogProduct.nutrients) {
+        const calculatedDosage = calculateDosageFromQuantity(
+          quantity,
+          catalogProduct.serving_size,
+          catalogProduct.nutrients
+        );
+        dosage = calculatedDosage.dosage;
+        units = calculatedDosage.units;
+      }
     }
 
-    // Step 4: Calculate dosage if we have serving info
-    let eventData = {
-      name: `${item.brand} ${item.name}`,
-      brand: item.brand
+    // If no catalog match or calculation failed, use generic dosage
+    if (!dosage) {
+      dosage = quantity.toString();
+      units = detectedItem.form || 'capsules';
+    }
+
+    // Build complete event data
+    const eventData = {
+      name: detectedItem.name,
+      brand: detectedItem.brand || null,
+      dosage: dosage,
+      units: units,
+      quantity_taken: `${quantity} ${detectedItem.form || 'capsules'}`,
+      product_catalog_id: catalogMatch?.product_id || null
     };
 
-    if (item.servingInfo) {
-      // Calculate dosage from serving size
-      const dosageInfo = calculateDosageFromQuantity(
-        quantityTaken,
-        item.servingInfo.servingSize,
-        item.servingInfo.nutrients
-      );
+    console.log('[photoEventParser] Complete event data:', eventData);
 
-      eventData = {
-        ...eventData,
-        dosage: dosageInfo.dosage,
-        units: dosageInfo.units,
-        quantity_taken: dosageInfo.quantityTaken,
-        matched_product_id: item.servingInfo.productId
-      };
-    } else {
-      // No serving info - just store quantity
-      eventData = {
-        ...eventData,
-        quantity_taken: `${quantityTaken} ${item.form || 'capsules'}`,
-        dosage: null,
-        units: null
-      };
-    }
-
-    // Step 5: Create voice_events entry
-    console.log('Creating voice_events entry...');
-    const voiceEvent = await createVoiceEvent(
+    // Create voice_events entry
+    const eventRecord = await createVoiceEvent(
       userId,
-      item.event_type,
+      detectedItem.event_type,
       eventData,
-      new Date().toISOString(),
-      auditId,
-      'photo'
+      new Date().toISOString(), // eventTime
+      auditId,                   // sourceRecordId
+      'photo'                    // captureMethod
     );
 
-    // Step 6: Update audit status (only mark as success after ALL items are processed)
-    // For now, we'll leave it as 'awaiting_user_clarification' until all items are done
-    // The UI will handle marking it complete after the last item
+    // Update audit status
+    await updateAuditStatus(auditId, 'awaiting_user_clarification_success', {
+      quantity_response: quantityResponse,
+      parsed_quantity: quantity,
+      final_event_data: eventData
+    });
 
     return {
       success: true,
-      event: voiceEvent,
+      event: eventRecord,
       complete: true
     };
+
   } catch (error) {
-    console.error('Error handling follow-up response:', error);
+    console.error('[photoEventParser] Error handling quantity response:', error);
     return {
       success: false,
-      error: error.message,
-      complete: false
+      error: error.message || 'Failed to process quantity response'
     };
   }
+}
+
+/**
+ * Build event data from detected item
+ */
+function buildEventDataFromDetection(detectedItem, productCatalogId, servingSize, nutrients) {
+  const { name, brand, event_type } = detectedItem;
+
+  const baseData = {
+    name,
+    brand: brand || null,
+    product_catalog_id: productCatalogId
+  };
+
+  if (event_type === 'supplement' || event_type === 'medication') {
+    return {
+      ...baseData,
+      dosage: null,  // Will be filled after quantity question
+      units: null
+    };
+  }
+
+  if (event_type === 'food') {
+    return {
+      description: brand ? `${brand} ${name}` : name,
+      product_catalog_id: productCatalogId,
+      calories: nutrients?.calories || null,
+      carbs: nutrients?.carbohydrates || null,
+      protein: nutrients?.protein || null,
+      fat: nutrients?.fat || null,
+      serving_size: servingSize ? formatServingSize(servingSize) : null
+    };
+  }
+
+  return baseData;
+}
+
+/**
+ * Generate natural language question for quantity
+ */
+function generateQuantityQuestion(productName, form) {
+  return `How many ${form} of ${productName} did you take?`;
+}
+
+/**
+ * Parse quantity from user response
+ * Handles: "2", "two", "2 capsules", "three pills", etc.
+ */
+function parseQuantity(response) {
+  if (!response) return null;
+
+  const cleaned = response.trim().toLowerCase();
+
+  // Try direct number parse
+  const directNumber = parseInt(cleaned);
+  if (!isNaN(directNumber) && directNumber > 0) {
+    return directNumber;
+  }
+
+  // Extract first number from text (e.g., "2 capsules" → 2)
+  const match = cleaned.match(/(\d+)/);
+  if (match) {
+    return parseInt(match[1]);
+  }
+
+  // Handle text numbers (one, two, three, etc.)
+  const textNumbers = {
+    'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
+    'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10
+  };
+
+  for (const [word, num] of Object.entries(textNumbers)) {
+    if (cleaned.includes(word)) {
+      return num;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Format serving size object to string
+ */
+function formatServingSize(servingSize) {
+  if (!servingSize) return null;
+
+  const { quantity, unit } = servingSize;
+
+  if (quantity && unit) {
+    return `${quantity} ${unit}${quantity > 1 ? 's' : ''}`;
+  }
+
+  return null;
 }

@@ -4,7 +4,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 const EVENT_TYPES = {
   food: {
     required: ['description'],
-    optional: ['calories', 'carbs', 'protein', 'fat', 'serving_size']
+    optional: ['calories', 'carbs', 'protein', 'fat', 'serving_size', 'product_catalog_id']
   },
   glucose: {
     required: ['value', 'units'],
@@ -20,7 +20,7 @@ const EVENT_TYPES = {
   },
   supplement: {
     required: ['name', 'dosage'],
-    optional: ['units']
+    optional: ['units', 'product_catalog_id']
   },
   sauna: {
     required: ['duration', 'temperature'],
@@ -28,7 +28,7 @@ const EVENT_TYPES = {
   },
   medication: {
     required: ['name', 'dosage'],
-    optional: ['units', 'route']
+    optional: ['units', 'route', 'active_ingredients', 'product_catalog_id']
   },
   symptom: {
     required: ['description'],
@@ -64,6 +64,23 @@ const GEMINI_RESPONSE_SCHEMA = {
         activity_type: { type: "STRING", nullable: true },
         insulin_type: { type: "STRING", nullable: true },
         temperature_units: { type: "STRING", nullable: true },
+        active_ingredients: {
+          type: "ARRAY",
+          nullable: true,
+          description: "Array of active ingredients for medications",
+          items: {
+            type: "OBJECT",
+            properties: {
+              name: { type: "STRING", description: "Ingredient name (INN preferred)" },
+              strength: { type: "STRING", description: "Strength with units (e.g., '200mg')" }
+            }
+          }
+        },
+        product_catalog_id: {
+          type: "STRING",
+          nullable: true,
+          description: "Optional UUID linking to product_catalog table (for food, supplement, medication)"
+        },
         value: {
           type: "STRING",
           nullable: true,
@@ -134,6 +151,23 @@ const TEXT_RESPONSE_SCHEMA = {
         activity_type: { type: "STRING", nullable: true },
         insulin_type: { type: "STRING", nullable: true },
         temperature_units: { type: "STRING", nullable: true },
+        active_ingredients: {
+          type: "ARRAY",
+          nullable: true,
+          description: "Array of active ingredients for medications",
+          items: {
+            type: "OBJECT",
+            properties: {
+              name: { type: "STRING", description: "Ingredient name (INN preferred)" },
+              strength: { type: "STRING", description: "Strength with units (e.g., '200mg')" }
+            }
+          }
+        },
+        product_catalog_id: {
+          type: "STRING",
+          nullable: true,
+          description: "Optional UUID linking to product_catalog table (for food, supplement, medication)"
+        },
         value: {
           type: "STRING",
           nullable: true,
@@ -192,6 +226,19 @@ export async function parseAudioWithGemini(audioUri, apiKey, userHistory = []) {
 
 Event types: food, glucose, insulin, activity, supplement, sauna, medication, symptom
 
+CRITICAL: Event Type Classification Rules:
+- FOOD: Whole foods, prepared meals, snacks without health claims (apple, rice, chicken, pizza)
+- SUPPLEMENT: Pills/capsules/powders marketed for health benefits (vitamins, minerals, protein powder, creatine, electrolytes like LMNT, probiotics, collagen)
+- MEDICATION: Pharmaceuticals with active ingredients (Advil, Tylenol, Metformin, antibiotics, prescription drugs)
+
+Ambiguous Cases:
+- "Protein powder" → supplement (not food)
+- "Fish oil" → supplement (not medication)
+- "Vitamin D" → supplement (not medication)
+- "Advil" / "Ibuprofen" → medication (not supplement)
+- "Energy drink" → food (unless vitamin-fortified health drink)
+- "Meal replacement shake" → food (if meal substitute) OR supplement (if protein powder)
+
 Rules:
 - Transcribe exactly what you hear first
 - For time ranges (e.g., "2-2:30pm"), calculate duration and set specific_time to start
@@ -199,6 +246,7 @@ Rules:
 - No time mentioned: set time_info to null
 - Defaults: glucose in mg/dL, insulin in units, temperature in Fahrenheit
 - Extract product names and brands accurately
+- For medications: If brand name is known (e.g., "Advil", "Tylenol"), extract active ingredients using international non-proprietary names (INN) in active_ingredients array. For multi-ingredient drugs (e.g., NyQuil), list ALL active ingredients.
 
 Example:
 Input: "Sauna from 2:42pm to 3:05pm"
@@ -409,12 +457,26 @@ function buildSystemPrompt() {
 
 Event types: food, glucose, insulin, activity, supplement, sauna, medication, symptom
 
+CRITICAL: Event Type Classification Rules:
+- FOOD: Whole foods, prepared meals, snacks without health claims (apple, rice, chicken, pizza)
+- SUPPLEMENT: Pills/capsules/powders marketed for health benefits (vitamins, minerals, protein powder, creatine, electrolytes like LMNT, probiotics, collagen)
+- MEDICATION: Pharmaceuticals with active ingredients (Advil, Tylenol, Metformin, antibiotics, prescription drugs)
+
+Ambiguous Cases:
+- "Protein powder" → supplement (not food)
+- "Fish oil" → supplement (not medication)
+- "Vitamin D" → supplement (not medication)
+- "Advil" / "Ibuprofen" → medication (not supplement)
+- "Energy drink" → food (unless vitamin-fortified health drink)
+- "Meal replacement shake" → food (if meal substitute) OR supplement (if protein powder)
+
 Rules:
 - For time ranges (e.g., "2-2:30pm"), calculate duration and set specific_time to start
 - For relative times (e.g., "30 min ago"), use relative_minutes_ago
 - No time mentioned: set time_info to null
 - Defaults: glucose in mg/dL, insulin in units, temperature in Fahrenheit
 - Extract product names and brands accurately
+- For medications: If brand name is known (e.g., "Advil", "Tylenol"), extract active ingredients using international non-proprietary names (INN) in active_ingredients array. For multi-ingredient drugs (e.g., NyQuil), list ALL active ingredients.
 
 Example:
 Input: "Sauna from 2:42pm to 3:05pm"

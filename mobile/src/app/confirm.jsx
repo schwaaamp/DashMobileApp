@@ -49,15 +49,11 @@ export default function ConfirmScreen() {
   const [detectedItems, setDetectedItems] = useState([]);
 
   useEffect(() => {
-    // Detect follow-up mode from route params (photo-based multi-item supplements)
-    if (metadata?.detected_items && Array.isArray(metadata.detected_items)) {
+    // Detect follow-up mode from route params (photo-based supplements)
+    if (metadata?.follow_up_question) {
       setFollowUpMode(true);
-      setDetectedItems(metadata.detected_items);
-      if (metadata.detected_items.length > 0) {
-        const firstItem = metadata.detected_items[0];
-        setFollowUpQuestion(firstItem.followUpQuestion);
-        setFollowUpField('dosage');
-      }
+      setFollowUpQuestion(metadata.follow_up_question);
+      setFollowUpField(metadata.follow_up_field || 'quantity');
     }
   }, [metadata]);
 
@@ -87,14 +83,13 @@ export default function ConfirmScreen() {
 
   const handleConfirm = async () => {
     try {
-      // Handle follow-up mode for photo-based multi-item supplements
+      // Handle follow-up mode for photo-based supplements
       if (followUpMode && followUpAnswer.trim()) {
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
         const { handleFollowUpResponse } = require('@/utils/photoEventParser');
         const result = await handleFollowUpResponse(
           auditId,
-          currentItemIndex,
           followUpAnswer,
           user.id
         );
@@ -104,19 +99,10 @@ export default function ConfirmScreen() {
           return;
         }
 
-        // Check if there are more items to process
-        if (currentItemIndex < detectedItems.length - 1) {
-          // Move to next item
-          const nextIndex = currentItemIndex + 1;
-          const nextItem = detectedItems[nextIndex];
-          setCurrentItemIndex(nextIndex);
-          setFollowUpQuestion(nextItem.followUpQuestion);
-          setFollowUpAnswer('');
+        if (result.complete) {
+          // Event saved successfully
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        } else {
-          // All items processed - update audit status and navigate back
-          await updateAuditStatus(auditId, 'awaiting_user_clarification_success');
-          Alert.alert('Success', `All ${detectedItems.length} supplement(s) saved successfully!`, [
+          Alert.alert('Success', 'Event saved successfully!', [
             { text: 'OK', onPress: () => router.back() }
           ]);
         }
@@ -432,16 +418,18 @@ export default function ConfirmScreen() {
                 marginBottom: 16,
               }}
             >
-              <Text
-                style={{
-                  fontSize: 16,
-                  fontFamily: 'Poppins_600SemiBold',
-                  color: colors.primary,
-                  marginBottom: 4,
-                }}
-              >
-                {detectedItems.length > 1 && `Item ${currentItemIndex + 1} of ${detectedItems.length}`}
-              </Text>
+              {metadata?.detected_item && (
+                <Text
+                  style={{
+                    fontSize: 16,
+                    fontFamily: 'Poppins_600SemiBold',
+                    color: colors.primary,
+                    marginBottom: 4,
+                  }}
+                >
+                  {metadata.detected_item.brand} {metadata.detected_item.name}
+                </Text>
+              )}
               <Text
                 style={{
                   fontSize: 15,

@@ -322,7 +322,7 @@ export default function HomeScreen() {
         // Import photo processing function
         const { processPhotoInput } = require('@/utils/photoEventParser');
 
-        // Process photo end-to-end with multi-supplement detection
+        // Process photo end-to-end: upload → Gemini → catalog lookup
         const result = await processPhotoInput(
           image.uri,
           userId,
@@ -334,21 +334,21 @@ export default function HomeScreen() {
           throw new Error(result.error || 'Failed to process photo');
         }
 
-        // Navigate to confirmation screen with detected items
+        // Navigate to confirmation screen with follow-up question
         router.push({
           pathname: "/confirm",
           params: {
-            data: JSON.stringify({
-              event_type: result.items[0]?.event_type || 'supplement',
-              event_data: {},
-              time_info: { is_current_time: true }
-            }),
+            data: JSON.stringify(result.parsed),
             captureMethod: "photo",
             auditId: result.auditId,
-            confidence: result.items[0]?.confidence?.toString() || '80',
+            missingFields: JSON.stringify(result.missingFields || []),
+            confidence: result.parsed.confidence?.toString() || null,
             metadata: JSON.stringify({
-              detected_items: result.items,
-              photo_url: result.photoUrl
+              follow_up_question: result.followUpQuestion,
+              follow_up_field: 'quantity',
+              photo_url: result.photoUrl,
+              detected_item: result.detectedItem,
+              catalog_match: result.catalogMatch
             })
           },
         });

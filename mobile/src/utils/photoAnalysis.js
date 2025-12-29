@@ -3,8 +3,9 @@
  * Uses Gemini 2.5 Flash Vision API to detect multiple supplements from photos
  */
 
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import { supabase } from './supabaseClient';
+import { Buffer } from 'buffer';
 
 // Event type schemas (same as geminiParser.js)
 const EVENT_TYPES = {
@@ -113,41 +114,98 @@ export async function imageToBase64(photoUri) {
  */
 export async function uploadPhotoToSupabase(photoUri, userId) {
   try {
+    console.log('[uploadPhotoToSupabase] Starting upload:', { photoUri, userId });
+
     // Generate unique filename
     const timestamp = Date.now();
     const fileExtension = photoUri.split('.').pop() || 'jpg';
     const fileName = `${timestamp}_supplement.${fileExtension}`;
     const filePath = `${userId}/${fileName}`;
 
+    console.log('[uploadPhotoToSupabase] File path:', filePath);
+
     // Read file as base64
     const base64 = await imageToBase64(photoUri);
+    console.log('[uploadPhotoToSupabase] Base64 length:', base64.length);
 
-    // Convert base64 to blob
-    const response = await fetch(`data:image/${fileExtension};base64,${base64}`);
-    const blob = await response.blob();
+    // Convert base64 to Uint8Array using Buffer (React Native compatible)
+    const bytes = decodeBase64ToUint8Array(base64);
+    console.log('[uploadPhotoToSupabase] Bytes length:', bytes.length);
 
-    // Upload to Supabase Storage
+    // Log upload parameters for debugging
+    console.log('[uploadPhotoToSupabase] Upload parameters:', {
+      bucket: 'user-photos',
+      filePath,
+      bytesType: bytes.constructor.name,
+      contentType: `image/${fileExtension}`
+    });
+
+    // Convert base64 to ArrayBuffer for upload
+    // Supabase accepts base64 strings directly, no need for blob conversion
     const { data, error } = await supabase.storage
       .from('user-photos')
-      .upload(filePath, blob, {
+      .upload(filePath, bytes, {
         contentType: `image/${fileExtension}`,
         upsert: false
       });
 
+    console.log('[uploadPhotoToSupabase] Upload response:', { data, error });
+
     if (error) {
-      console.error('Supabase storage upload error:', error);
+      console.error('[uploadPhotoToSupabase] Supabase upload error:', {
+        message: error.message,
+        statusCode: error.statusCode,
+        error: error
+      });
       return { url: null, error: error.message };
     }
+
+    console.log('[uploadPhotoToSupabase] Upload successful:', data);
 
     // Get public URL
     const { data: { publicUrl } } = supabase.storage
       .from('user-photos')
       .getPublicUrl(filePath);
 
+    console.log('[uploadPhotoToSupabase] Public URL:', publicUrl);
+
     return { url: publicUrl, error: null };
   } catch (error) {
-    console.error('Error uploading photo:', error);
+    console.error('[uploadPhotoToSupabase] Exception caught:', {
+      message: error.message,
+      stack: error.stack,
+      error: error
+    });
     return { url: null, error: error.message };
+  }
+}
+
+/**
+ * Decode base64 string to Uint8Array for file upload
+ * Uses Buffer (React Native compatible) instead of atob (Web API only)
+ */
+function decodeBase64ToUint8Array(base64) {
+  try {
+    // Buffer is available in React Native via polyfills
+    if (typeof Buffer !== 'undefined') {
+      const buffer = Buffer.from(base64, 'base64');
+      return new Uint8Array(buffer);
+    }
+
+    // Fallback to atob for web/test environments
+    if (typeof atob !== 'undefined') {
+      const binaryString = atob(base64);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      return bytes;
+    }
+
+    throw new Error('No base64 decoding method available (Buffer or atob)');
+  } catch (error) {
+    console.error('[decodeBase64ToUint8Array] Error:', error);
+    throw new Error(`Failed to decode base64: ${error.message}`);
   }
 }
 
@@ -162,14 +220,16 @@ export async function uploadPhotoToSupabase(photoUri, userId) {
  */
 export async function analyzeSupplementPhoto(photoUri, userId, geminiApiKey) {
   try {
-    console.log('Analyzing photo with Gemini Vision API...');
+    console.log('[analyzeSupplementPhoto] Starting analysis:', { photoUri, userId });
 
     // Convert image to base64
     const base64Image = await imageToBase64(photoUri);
+    console.log('[analyzeSupplementPhoto] Base64 image length:', base64Image.length);
 
     // Detect MIME type from file extension
     const fileExtension = photoUri.split('.').pop()?.toLowerCase() || 'jpg';
     const mimeType = fileExtension === 'png' ? 'image/png' : 'image/jpeg';
+    console.log('[analyzeSupplementPhoto] Detected MIME type:', mimeType);
 
     // Prepare Gemini API request
     const requestBody = {
@@ -194,7 +254,7 @@ export async function analyzeSupplementPhoto(photoUri, userId, geminiApiKey) {
     // Call Gemini API
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${geminiApiKey}`;
 
-    console.log('Calling Gemini Vision API...');
+    console.log('[analyzeSupplementPhoto] Calling Gemini Vision API...');
     const response = await fetch(url, {
       method: 'POST',
       headers: {
@@ -203,33 +263,40 @@ export async function analyzeSupplementPhoto(photoUri, userId, geminiApiKey) {
       body: JSON.stringify(requestBody)
     });
 
-    console.log('Gemini Vision API response status:', response.status);
+    console.log('[analyzeSupplementPhoto] Gemini Vision API response status:', response.status);
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('Gemini API error response:', errorText);
+      console.error('[analyzeSupplementPhoto] Gemini API error response:', errorText);
       throw new Error(`Gemini API error (${response.status}): ${errorText}`);
     }
 
     const result = await response.json();
+    console.log('[analyzeSupplementPhoto] Gemini API response:', JSON.stringify(result, null, 2));
 
     // Parse response
     const textContent = result.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!textContent) {
+      console.error('[analyzeSupplementPhoto] No content in Gemini response');
       throw new Error('No content in Gemini response');
     }
 
+    console.log('[analyzeSupplementPhoto] Text content from Gemini:', textContent);
+
     // Parse JSON response
     const parsed = JSON.parse(textContent);
+    console.log('[analyzeSupplementPhoto] Parsed JSON:', JSON.stringify(parsed, null, 2));
 
     // Validate response structure
     if (!parsed.items || !Array.isArray(parsed.items)) {
+      console.error('[analyzeSupplementPhoto] Invalid response structure - missing items array');
       throw new Error('Invalid response structure from Gemini - missing items array');
     }
 
     // Validate each item has required fields
     for (const item of parsed.items) {
       if (!item.name || !item.brand) {
+        console.error('[analyzeSupplementPhoto] Invalid item structure:', item);
         throw new Error('Invalid item structure - missing name or brand');
       }
       // Default event_type to supplement if not specified
@@ -238,7 +305,7 @@ export async function analyzeSupplementPhoto(photoUri, userId, geminiApiKey) {
       }
     }
 
-    console.log(`Detected ${parsed.items.length} supplement(s) in photo`);
+    console.log(`[analyzeSupplementPhoto] ✓ Detected ${parsed.items.length} supplement(s) in photo`);
 
     return {
       success: true,
@@ -246,7 +313,11 @@ export async function analyzeSupplementPhoto(photoUri, userId, geminiApiKey) {
       confidence: parsed.confidence || 80
     };
   } catch (error) {
-    console.error('Error analyzing photo:', error);
+    console.error('[analyzeSupplementPhoto] Error analyzing photo:', {
+      message: error.message,
+      stack: error.stack,
+      error: error
+    });
     return {
       success: false,
       items: [],

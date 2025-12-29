@@ -1,28 +1,27 @@
 /**
- * Test Case 2: Photo Supplement with Follow-up Questions
- * Tests photo analysis for NOW Magtein supplement
- *
- * EXPECTED TO FAIL: Photo analysis endpoint not yet implemented
+ * Integration Tests: Photo → Event Flow
+ * Tests complete photo capture flow with product catalog integration
  *
  * Expected behavior:
- * - Parse photo to identify "NOW Magtein" supplement
- * - Recognize missing dosage information
- * - Ask follow-up question: "How many capsules did you take?"
- * - Store final event after user response
+ * - Upload photo to Supabase Storage
+ * - Analyze with Gemini Vision (barcode + OCR)
+ * - Search product catalog for match
+ * - Generate follow-up question for quantity
+ * - Handle user response and create event
  */
 
 import { supabase } from '@/utils/supabaseClient';
 
 // Mock dependencies
 jest.mock('@/utils/supabaseClient');
-jest.mock('expo-file-system', () => ({
+jest.mock('expo-file-system/legacy', () => ({
   readAsStringAsync: jest.fn().mockResolvedValue('base64encodedimage'),
   EncodingType: {
     Base64: 'base64'
   }
 }));
 
-describe.skip('Photo Supplement Analysis - EXPECTED TO FAIL', () => {
+describe('Photo → Event Integration Tests', () => {
   const mockUserId = '12345678-1234-1234-1234-123456789012';
   const mockAuditId = 'audit-photo-123';
   const photoPath = '/Users/schwaaamp/DashMobileApp/mobile/__tests__/now_magtein.png';
@@ -114,29 +113,48 @@ describe.skip('Photo Supplement Analysis - EXPECTED TO FAIL', () => {
     expect(result.items[0].name).toContain('Magtein');
   });
 
-  it('should recognize missing dosage and return incomplete status', async () => {
-    // Mock Gemini Vision API response
-    global.fetch = jest.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({
-        candidates: [{
-          content: {
-            parts: [{
-              text: JSON.stringify({
-                items: [{
-                  name: 'Magtein Magnesium L-Threonate',
-                  brand: 'NOW',
-                  form: 'capsules',
-                  event_type: 'supplement'
-                }],
-                confidence: 90
-              })
-            }]
-          }
-        }]
+  it('should recognize missing quantity and return incomplete status', async () => {
+    // Mock Gemini Vision API response for photo analysis
+    global.fetch = jest.fn()
+      // First call: Gemini Vision for product detection
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          candidates: [{
+            content: {
+              parts: [{
+                text: JSON.stringify({
+                  items: [{
+                    name: 'Magtein Magnesium L-Threonate',
+                    brand: 'NOW',
+                    form: 'capsules',
+                    event_type: 'supplement'
+                  }],
+                  confidence: 90
+                })
+              }]
+            }
+          }]
+        })
       })
-    });
+      // Second call: Barcode detection (returns no barcode)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          candidates: [{
+            content: {
+              parts: [{
+                text: JSON.stringify({
+                  success: false,
+                  barcode: null
+                })
+              }]
+            }
+          }]
+        })
+      });
 
     const { processPhotoInput } = require('@/utils/photoEventParser');
 
@@ -147,35 +165,52 @@ describe.skip('Photo Supplement Analysis - EXPECTED TO FAIL', () => {
       'photo'
     );
 
-    // Should be incomplete due to missing quantity (dosage calculation pending)
+    // Should be incomplete due to missing quantity
     expect(result.complete).toBe(false);
-    expect(result.items).toBeDefined();
-    expect(result.items[0].needsManualDosage).toBeDefined();
+    expect(result.missingFields).toContain('quantity');
+    expect(result.parsed).toBeDefined();
   });
 
-  it('should generate follow-up question for missing dosage', async () => {
-    // Mock Gemini Vision API response
-    global.fetch = jest.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({
-        candidates: [{
-          content: {
-            parts: [{
-              text: JSON.stringify({
-                items: [{
-                  name: 'Magtein Magnesium L-Threonate',
-                  brand: 'NOW',
-                  form: 'capsules',
-                  event_type: 'supplement'
-                }],
-                confidence: 90
-              })
-            }]
-          }
-        }]
+  it('should generate follow-up question for missing quantity', async () => {
+    // Mock Gemini Vision API responses
+    global.fetch = jest.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          candidates: [{
+            content: {
+              parts: [{
+                text: JSON.stringify({
+                  items: [{
+                    name: 'Magtein Magnesium L-Threonate',
+                    brand: 'NOW',
+                    form: 'capsules',
+                    event_type: 'supplement'
+                  }],
+                  confidence: 90
+                })
+              }]
+            }
+          }]
+        })
       })
-    });
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          candidates: [{
+            content: {
+              parts: [{
+                text: JSON.stringify({
+                  success: false,
+                  barcode: null
+                })
+              }]
+            }
+          }]
+        })
+      });
 
     const { processPhotoInput } = require('@/utils/photoEventParser');
 
@@ -186,36 +221,53 @@ describe.skip('Photo Supplement Analysis - EXPECTED TO FAIL', () => {
       'photo'
     );
 
-    // Should have a follow-up question for each item
-    expect(result.items).toBeDefined();
-    expect(result.items[0].followUpQuestion).toBeDefined();
-    expect(result.items[0].followUpQuestion).toMatch(/how many/i);
-    expect(result.items[0].followUpQuestion).toContain('capsules');
+    // Should have a follow-up question
+    expect(result.followUpQuestion).toBeDefined();
+    expect(result.followUpQuestion).toMatch(/how many/i);
+    expect(result.followUpQuestion).toContain('capsules');
+    expect(result.followUpQuestion).toContain('Magtein');
   });
 
   it('should upload photo to Supabase Storage and store URL in audit record', async () => {
-    // Mock Gemini Vision API response
-    global.fetch = jest.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({
-        candidates: [{
-          content: {
-            parts: [{
-              text: JSON.stringify({
-                items: [{
-                  name: 'Magtein Magnesium L-Threonate',
-                  brand: 'NOW',
-                  form: 'capsules',
-                  event_type: 'supplement'
-                }],
-                confidence: 90
-              })
-            }]
-          }
-        }]
+    // Mock Gemini Vision API responses
+    global.fetch = jest.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          candidates: [{
+            content: {
+              parts: [{
+                text: JSON.stringify({
+                  items: [{
+                    name: 'Magtein Magnesium L-Threonate',
+                    brand: 'NOW',
+                    form: 'capsules',
+                    event_type: 'supplement'
+                  }],
+                  confidence: 90
+                })
+              }]
+            }
+          }]
+        })
       })
-    });
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          candidates: [{
+            content: {
+              parts: [{
+                text: JSON.stringify({
+                  success: false,
+                  barcode: null
+                })
+              }]
+            }
+          }]
+        })
+      });
 
     const { processPhotoInput } = require('@/utils/photoEventParser');
 
@@ -227,49 +279,65 @@ describe.skip('Photo Supplement Analysis - EXPECTED TO FAIL', () => {
     );
 
     // Verify photo upload attempted and audit record created
-    // The actual supabase.storage call happens inside uploadPhotoToSupabase
     expect(result.auditId).toBeDefined();
     expect(result.success).toBe(true);
-    expect(result.items).toBeDefined();
-
-    // photoUrl may be null if upload fails (which is allowed as per processPhotoInput design)
-    // The function continues without URL if upload fails
+    expect(result.photoUrl).toBeDefined();
+    expect(result.parsed).toBeDefined();
   });
 
   it('should store voice_records_audit with photo metadata', async () => {
-    // Mock Gemini Vision API response
-    global.fetch = jest.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({
-        candidates: [{
-          content: {
-            parts: [{
-              text: JSON.stringify({
-                items: [{
-                  name: 'Magtein Magnesium L-Threonate',
-                  brand: 'NOW',
-                  form: 'capsules',
-                  event_type: 'supplement'
-                }],
-                confidence: 90
-              })
-            }]
-          }
-        }]
+    // Mock Gemini Vision API responses
+    global.fetch = jest.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          candidates: [{
+            content: {
+              parts: [{
+                text: JSON.stringify({
+                  items: [{
+                    name: 'Magtein Magnesium L-Threonate',
+                    brand: 'NOW',
+                    form: 'capsules',
+                    event_type: 'supplement'
+                  }],
+                  confidence: 90
+                })
+              }]
+            }
+          }]
+        })
       })
-    });
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          candidates: [{
+            content: {
+              parts: [{
+                text: JSON.stringify({
+                  success: false,
+                  barcode: null
+                })
+              }]
+            }
+          }]
+        })
+      });
 
     const { processPhotoInput } = require('@/utils/photoEventParser');
 
-    await processPhotoInput(
+    const result = await processPhotoInput(
       photoPath,
       mockUserId,
       'test-api-key',
       'photo'
     );
 
-    // Should have called insert on voice_records_audit
+    // Should have created audit record
+    expect(result.success).toBe(true);
+    expect(result.auditId).toBeDefined();
     expect(supabase.from).toHaveBeenCalledWith('voice_records_audit');
   });
 
@@ -314,28 +382,45 @@ describe.skip('Photo Supplement Analysis - EXPECTED TO FAIL', () => {
   });
 
   it('should handle processPhotoInput end-to-end flow', async () => {
-    // Mock Gemini Vision API response
-    global.fetch = jest.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({
-        candidates: [{
-          content: {
-            parts: [{
-              text: JSON.stringify({
-                items: [{
-                  name: 'Magtein Magnesium L-Threonate',
-                  brand: 'NOW',
-                  form: 'capsules',
-                  event_type: 'supplement'
-                }],
-                confidence: 90
-              })
-            }]
-          }
-        }]
+    // Mock Gemini Vision API responses
+    global.fetch = jest.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          candidates: [{
+            content: {
+              parts: [{
+                text: JSON.stringify({
+                  items: [{
+                    name: 'Magtein Magnesium L-Threonate',
+                    brand: 'NOW',
+                    form: 'capsules',
+                    event_type: 'supplement'
+                  }],
+                  confidence: 90
+                })
+              }]
+            }
+          }]
+        })
       })
-    });
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          candidates: [{
+            content: {
+              parts: [{
+                text: JSON.stringify({
+                  success: false,
+                  barcode: null
+                })
+              }]
+            }
+          }]
+        })
+      });
 
     const { processPhotoInput } = require('@/utils/photoEventParser');
 
@@ -350,14 +435,12 @@ describe.skip('Photo Supplement Analysis - EXPECTED TO FAIL', () => {
     expect(result).toMatchObject({
       success: true,
       complete: false,
-      items: expect.arrayContaining([
-        expect.objectContaining({
-          name: expect.any(String),
-          brand: expect.any(String),
-          followUpQuestion: expect.any(String)
-        })
-      ]),
-      auditId: expect.any(String)
+      followUpQuestion: expect.any(String),
+      auditId: expect.any(String),
+      parsed: expect.objectContaining({
+        event_type: 'supplement',
+        complete: false
+      })
     });
   });
 
@@ -387,14 +470,17 @@ describe.skip('Photo Supplement Analysis - EXPECTED TO FAIL', () => {
                       name: 'Magtein Magnesium L-Threonate',
                       brand: 'NOW',
                       form: 'capsules',
-                      event_type: 'supplement',
-                      servingInfo: null
-                    }]
+                      event_type: 'supplement'
+                    }],
+                    catalog_match: null // No catalog match
                   }
                 },
                 error: null
               }))
             }))
+          })),
+          update: jest.fn(() => ({
+            eq: jest.fn(() => Promise.resolve({ error: null }))
           }))
         };
       }
@@ -407,9 +493,12 @@ describe.skip('Photo Supplement Analysis - EXPECTED TO FAIL', () => {
                   id: 'event-123',
                   event_type: 'supplement',
                   event_data: {
-                    name: 'NOW Magtein Magnesium L-Threonate',
+                    name: 'Magtein Magnesium L-Threonate',
                     brand: 'NOW',
-                    quantity_taken: '2 capsules'
+                    dosage: '2',
+                    units: 'capsules',
+                    quantity_taken: '2 capsules',
+                    product_catalog_id: null
                   },
                   capture_method: 'photo'
                 },
@@ -419,19 +508,39 @@ describe.skip('Photo Supplement Analysis - EXPECTED TO FAIL', () => {
           }))
         };
       }
+      if (table === 'product_catalog') {
+        return {
+          select: jest.fn(() => ({
+            eq: jest.fn(() => ({
+              single: jest.fn(() => Promise.resolve({
+                data: null, // No catalog product found
+                error: null
+              }))
+            }))
+          }))
+        };
+      }
       return {
-        select: jest.fn(() => ({})),
-        insert: jest.fn(() => ({}))
+        select: jest.fn(() => ({
+          eq: jest.fn(() => Promise.resolve({ data: null, error: null }))
+        })),
+        insert: jest.fn(() => ({
+          select: jest.fn(() => ({
+            single: jest.fn(() => Promise.resolve({ data: null, error: null }))
+          }))
+        })),
+        update: jest.fn(() => ({
+          eq: jest.fn(() => Promise.resolve({ error: null }))
+        }))
       };
     });
 
     const { handleFollowUpResponse } = require('@/utils/photoEventParser');
 
-    // Simulate user responding to "How many capsules?" with itemIndex
+    // Simulate user responding to "How many capsules?"
     const result = await handleFollowUpResponse(
       mockAuditId,
-      0, // itemIndex
-      '2',
+      '2', // quantityResponse
       mockUserId
     );
 
