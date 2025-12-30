@@ -128,15 +128,21 @@ describe('Photo → Event Integration Tests', () => {
 
   it('should recognize missing quantity and return incomplete status (with catalog match)', async () => {
     // Mock catalog match so we get the quantity flow, not nutrition label flow
+    // Using real DB record format for NOW Magtein
     searchProductCatalog.mockResolvedValueOnce([{
-      id: 'catalog-123',
+      id: 'ec5c637a-a575-490e-9c1a-59d3a4b1ed0e',
+      product_key: 'now magtein magnesium l threonate',
       product_name: 'Magtein Magnesium L-Threonate',
-      brand: 'NOW Foods',
+      brand: 'NOW',
       product_type: 'supplement',
       serving_quantity: 3,
-      serving_unit: 'capsule',
-      micros: { magnesium: { amount: 144, unit: 'mg' } },
-      search_rank: 0.9
+      serving_unit: 'capsules',
+      micros: {
+        Magtein: { unit: 'g', amount: 2 },
+        'Magnesium (elemental)': { unit: 'mg', amount: 144 }
+      },
+      active_ingredients: [{ name: 'Magnesium L-Threonate', atc_code: null, strength: null }],
+      times_logged: 10
     }]);
 
     // Mock Gemini Vision API response for photo analysis
@@ -257,15 +263,21 @@ describe('Photo → Event Integration Tests', () => {
 
   it('should generate follow-up question for missing quantity (with catalog match)', async () => {
     // Mock catalog match so we get the quantity flow
+    // Using real DB record format for NOW Magtein
     searchProductCatalog.mockResolvedValueOnce([{
-      id: 'catalog-123',
+      id: 'ec5c637a-a575-490e-9c1a-59d3a4b1ed0e',
+      product_key: 'now magtein magnesium l threonate',
       product_name: 'Magtein Magnesium L-Threonate',
-      brand: 'NOW Foods',
+      brand: 'NOW',
       product_type: 'supplement',
       serving_quantity: 3,
-      serving_unit: 'capsule',
-      micros: { magnesium: { amount: 144, unit: 'mg' } },
-      search_rank: 0.9
+      serving_unit: 'capsules',
+      micros: {
+        Magtein: { unit: 'g', amount: 2 },
+        'Magnesium (elemental)': { unit: 'mg', amount: 144 }
+      },
+      active_ingredients: [{ name: 'Magnesium L-Threonate', atc_code: null, strength: null }],
+      times_logged: 10
     }]);
 
     // Mock Gemini Vision API responses
@@ -479,15 +491,21 @@ describe('Photo → Event Integration Tests', () => {
 
   it('should handle processPhotoInput end-to-end flow (with catalog match)', async () => {
     // Mock catalog match so we get followUpQuestion
+    // Using real DB record format for NOW Magtein
     searchProductCatalog.mockResolvedValueOnce([{
-      id: 'catalog-123',
+      id: 'ec5c637a-a575-490e-9c1a-59d3a4b1ed0e',
+      product_key: 'now magtein magnesium l threonate',
       product_name: 'Magtein Magnesium L-Threonate',
-      brand: 'NOW Foods',
+      brand: 'NOW',
       product_type: 'supplement',
       serving_quantity: 3,
-      serving_unit: 'capsule',
-      micros: { magnesium: { amount: 144, unit: 'mg' } },
-      search_rank: 0.9
+      serving_unit: 'capsules',
+      micros: {
+        Magtein: { unit: 'g', amount: 2 },
+        'Magnesium (elemental)': { unit: 'mg', amount: 144 }
+      },
+      active_ingredients: [{ name: 'Magnesium L-Threonate', atc_code: null, strength: null }],
+      times_logged: 10
     }]);
 
     // Mock Gemini Vision API responses
@@ -721,5 +739,155 @@ describe('Photo → Event Integration Tests', () => {
     expect(result.event).toBeDefined();
     expect(result.event.event_type).toBe('supplement');
     expect(result.event.capture_method).toBe('photo');
+  });
+
+  it('should return isMultiItem=true when multiple supplements detected', async () => {
+    // Mock catalog match for all items - using real DB record format
+    searchProductCatalog
+      .mockResolvedValueOnce([{
+        id: 'catalog-1',
+        product_key: 'now vitamin d3',
+        product_name: 'Vitamin D3',
+        brand: 'NOW',
+        product_type: 'supplement',
+        times_logged: 5
+      }])
+      .mockResolvedValueOnce([{
+        id: 'catalog-2',
+        product_key: 'nordic naturals omega 3',
+        product_name: 'Omega-3',
+        brand: 'Nordic Naturals',
+        product_type: 'supplement',
+        times_logged: 3
+      }])
+      .mockResolvedValueOnce([{
+        id: 'catalog-3',
+        product_key: 'now magnesium',
+        product_name: 'Magnesium',
+        brand: 'NOW',
+        product_type: 'supplement',
+        times_logged: 8
+      }]);
+
+    // Mock Gemini Vision API response with 3 items
+    global.fetch = jest.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          candidates: [{
+            content: {
+              parts: [{
+                text: JSON.stringify({
+                  items: [
+                    { name: 'Vitamin D3', brand: 'NOW', form: 'softgels', event_type: 'supplement' },
+                    { name: 'Omega-3', brand: 'Nordic Naturals', form: 'softgels', event_type: 'supplement' },
+                    { name: 'Magnesium', brand: 'NOW', form: 'capsules', event_type: 'supplement' }
+                  ],
+                  confidence: 90
+                })
+              }]
+            }
+          }]
+        })
+      });
+
+    const { processPhotoInput } = require('@/utils/photoEventParser');
+
+    const result = await processPhotoInput(
+      photoPath,
+      mockUserId,
+      'test-api-key',
+      'photo'
+    );
+
+    // Should be multi-item mode
+    expect(result.success).toBe(true);
+    expect(result.isMultiItem).toBe(true);
+    expect(result.detectedItems).toBeDefined();
+    expect(result.detectedItems.length).toBe(3);
+
+    // Each item should have catalog match info
+    result.detectedItems.forEach(item => {
+      expect(item.name).toBeDefined();
+      expect(item.brand).toBeDefined();
+      expect(item.selected).toBe(true); // Default selected
+    });
+
+    // Should have match counts
+    expect(result.matchedCount).toBe(3);
+    expect(result.needsLabelCount).toBe(0);
+  });
+
+  it('should handle mixed multi-item (some with catalog, some without)', async () => {
+    // Mock: first two items have catalog match, third does not
+    // Using real DB record format
+    searchProductCatalog
+      .mockResolvedValueOnce([{
+        id: 'catalog-1',
+        product_key: 'now vitamin d3',
+        product_name: 'Vitamin D3',
+        brand: 'NOW',
+        product_type: 'supplement',
+        times_logged: 5
+      }])
+      .mockResolvedValueOnce([{
+        id: 'catalog-2',
+        product_key: 'nordic naturals omega 3',
+        product_name: 'Omega-3',
+        brand: 'Nordic Naturals',
+        product_type: 'supplement',
+        times_logged: 3
+      }])
+      .mockResolvedValueOnce([]); // No match for third item
+
+    // Mock Gemini Vision API response with 3 items
+    global.fetch = jest.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          candidates: [{
+            content: {
+              parts: [{
+                text: JSON.stringify({
+                  items: [
+                    { name: 'Vitamin D3', brand: 'NOW', form: 'softgels', event_type: 'supplement' },
+                    { name: 'Omega-3', brand: 'Nordic Naturals', form: 'softgels', event_type: 'supplement' },
+                    { name: 'New Supplement', brand: 'Unknown', form: 'capsules', event_type: 'supplement' }
+                  ],
+                  confidence: 90
+                })
+              }]
+            }
+          }]
+        })
+      });
+
+    const { processPhotoInput } = require('@/utils/photoEventParser');
+
+    const result = await processPhotoInput(
+      photoPath,
+      mockUserId,
+      'test-api-key',
+      'photo'
+    );
+
+    // Should be multi-item mode
+    expect(result.success).toBe(true);
+    expect(result.isMultiItem).toBe(true);
+    expect(result.detectedItems.length).toBe(3);
+
+    // Two with catalog, one without
+    expect(result.matchedCount).toBe(2);
+    expect(result.needsLabelCount).toBe(1);
+
+    // Check individual items
+    const itemsWithCatalog = result.detectedItems.filter(i => i.catalogMatch);
+    const itemsNeedingLabel = result.detectedItems.filter(i => i.requiresNutritionLabel);
+
+    expect(itemsWithCatalog.length).toBe(2);
+    expect(itemsNeedingLabel.length).toBe(1);
+    expect(itemsNeedingLabel[0].name).toBe('New Supplement');
   });
 });

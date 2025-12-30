@@ -192,22 +192,55 @@ export async function searchProductCatalog(query, userId, limit = 10) {
   }
 
   try {
-    const normalizedQuery = query.trim().toLowerCase();
+    // Split query into individual terms for better matching
+    // e.g., "NOW Magtein" -> ["now", "magtein"]
+    const terms = query.trim().toLowerCase().split(/\s+/).filter(t => t.length > 0);
 
-    // Use PostgreSQL full-text search for best matches
+    if (terms.length === 0) {
+      return [];
+    }
+
+    // Build OR conditions for each term to match product_name, brand, or product_key
+    // This allows "NOW Magtein" to match products where:
+    // - product_name contains "magtein" OR
+    // - brand contains "now" OR
+    // - product_key contains either term
+    const orConditions = terms.map(term =>
+      `product_name.ilike.%${term}%,brand.ilike.%${term}%,product_key.ilike.%${term}%`
+    ).join(',');
+
     const { data, error } = await supabase
       .from('product_catalog')
       .select('*')
-      .or(`product_name.ilike.%${normalizedQuery}%,brand.ilike.%${normalizedQuery}%,product_key.ilike.%${normalizedQuery}%`)
+      .or(orConditions)
       .order('times_logged', { ascending: false })  // Popularity ranking
-      .limit(limit);
+      .limit(limit * 2);  // Fetch more to allow for scoring/filtering
 
     if (error) {
       console.error('Error searching product catalog:', error);
       throw error;
     }
 
-    return data || [];
+    // Post-filter: Score results by how many search terms they match
+    // Products matching MORE terms rank higher
+    const scoredResults = (data || []).map(product => {
+      const searchableText = `${product.product_name || ''} ${product.brand || ''} ${product.product_key || ''}`.toLowerCase();
+      const matchCount = terms.filter(term => searchableText.includes(term)).length;
+      return { ...product, _matchScore: matchCount };
+    });
+
+    // Sort by match score (descending), then by times_logged (descending)
+    scoredResults.sort((a, b) => {
+      if (b._matchScore !== a._matchScore) {
+        return b._matchScore - a._matchScore;
+      }
+      return (b.times_logged || 0) - (a.times_logged || 0);
+    });
+
+    // Remove the temporary score field and limit results
+    return scoredResults
+      .map(({ _matchScore, ...product }) => product)
+      .slice(0, limit);
   } catch (error) {
     console.error('Exception in searchProductCatalog:', error);
     return [];

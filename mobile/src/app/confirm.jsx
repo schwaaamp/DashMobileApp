@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, Alert, TextInput, ActivityIndicator } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 import { useColors } from '@/components/useColors';
 import Header from '@/components/Header';
 import * as Haptics from 'expo-haptics';
@@ -50,6 +51,16 @@ export default function ConfirmScreen() {
   const [currentItemIndex, setCurrentItemIndex] = useState(0);
   const [detectedItems, setDetectedItems] = useState([]);
 
+  // Multi-item mode state
+  const [isMultiItemMode, setIsMultiItemMode] = useState(false);
+  const [multiItemStep, setMultiItemStep] = useState('selection'); // 'selection', 'quantity', 'new_item_label', 'new_item_confirm', 'new_item_quantity', 'processing'
+  const [pendingNewItems, setPendingNewItems] = useState([]); // Items needing nutrition label capture
+  const [currentNewItemIndex, setCurrentNewItemIndex] = useState(0); // Current new item being processed
+  const [newItemCatalogProduct, setNewItemCatalogProduct] = useState(null); // Catalog product created for current new item
+  const [itemQuantities, setItemQuantities] = useState({}); // {itemIndex: quantity}
+  const [currentMultiItemIndex, setCurrentMultiItemIndex] = useState(0);
+  const [isProcessingMultiItem, setIsProcessingMultiItem] = useState(false);
+
   // Nutrition label capture flow state
   const [requiresNutritionLabel, setRequiresNutritionLabel] = useState(false);
   const [nutritionLabelStep, setNutritionLabelStep] = useState('capture'); // 'capture', 'processing', 'confirm', 'quantity'
@@ -60,22 +71,37 @@ export default function ConfirmScreen() {
   const [quantityInput, setQuantityInput] = useState('');
   const [labelPhotoUrl, setLabelPhotoUrl] = useState(null);
 
-  // Detect if we need nutrition label capture - only set initial state once
+  // Initialize multi-item mode from metadata - only run once on mount
   useEffect(() => {
-    if (metadata?.requires_nutrition_label && !requiresNutritionLabel) {
+    if (metadata?.is_multi_item && metadata?.detected_items) {
+      console.log('[confirm.jsx] Initializing multi-item mode');
+      console.log('[confirm.jsx] detected_items count:', metadata.detected_items.length);
+      setIsMultiItemMode(true);
+      setDetectedItems(metadata.detected_items);
+      setMultiItemStep('selection');
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Detect if we need nutrition label capture - only set initial state once on mount
+  // Skip if this is multi-item mode (check metadata directly, not state)
+  useEffect(() => {
+    if (metadata?.requires_nutrition_label && !metadata?.is_multi_item) {
       setRequiresNutritionLabel(true);
       setNutritionLabelStep('capture');
     }
-  }, [metadata, requiresNutritionLabel]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
+  // Detect follow-up mode from route params - only run once on mount
   useEffect(() => {
-    // Detect follow-up mode from route params (photo-based supplements)
-    if (metadata?.follow_up_question) {
+    if (metadata?.follow_up_question && !metadata?.is_multi_item) {
       setFollowUpMode(true);
       setFollowUpQuestion(metadata.follow_up_question);
       setFollowUpField(metadata.follow_up_field || 'quantity');
     }
-  }, [metadata]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     // If a product is selected, update the event data with its nutritional info
@@ -201,6 +227,174 @@ export default function ConfirmScreen() {
   const handleCancel = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     router.back();
+  };
+
+  // Multi-item mode handlers
+  const handleToggleItemSelection = (index) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setDetectedItems(prev => prev.map((item, i) =>
+      i === index ? { ...item, selected: !item.selected } : item
+    ));
+  };
+
+  const handleSelectAllItems = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setDetectedItems(prev => prev.map(item => ({ ...item, selected: true })));
+  };
+
+  const handleDeselectAllItems = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setDetectedItems(prev => prev.map(item => ({ ...item, selected: false })));
+  };
+
+  const handleMultiItemProceed = () => {
+    const selectedItems = detectedItems.filter(item => item.selected);
+
+    if (selectedItems.length === 0) {
+      Alert.alert('No Items Selected', 'Please select at least one item to log.');
+      return;
+    }
+
+    // Check if any selected items need nutrition labels (no catalog match)
+    const itemsReadyToLog = selectedItems.filter(item => !item.requiresNutritionLabel);
+    const needsLabelItems = selectedItems.filter(item => item.requiresNutritionLabel);
+
+    console.log('[handleMultiItemProceed] Ready to log:', itemsReadyToLog.length, 'Needs labels:', needsLabelItems.length);
+
+    // Store the new items that will need label capture later
+    setPendingNewItems(needsLabelItems.map(item => ({
+      ...item,
+      originalIndex: detectedItems.indexOf(item)
+    })));
+
+    if (itemsReadyToLog.length > 0) {
+      // Start with catalog-matched items - collect quantities
+      const firstReadyIndex = detectedItems.findIndex(
+        item => item.selected && !item.requiresNutritionLabel
+      );
+      setCurrentMultiItemIndex(firstReadyIndex >= 0 ? firstReadyIndex : 0);
+      setMultiItemStep('quantity');
+    } else if (needsLabelItems.length > 0) {
+      // Only new items selected - go straight to nutrition label capture
+      setCurrentNewItemIndex(0);
+      setMultiItemStep('new_item_label');
+    }
+
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+  };
+
+  const handleMultiItemQuantitySubmit = (quantity) => {
+    if (!quantity || quantity <= 0) {
+      Alert.alert('Invalid Quantity', 'Please enter a valid quantity.');
+      return;
+    }
+
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+
+    // Save quantity for current item
+    setItemQuantities(prev => ({
+      ...prev,
+      [currentMultiItemIndex]: quantity
+    }));
+
+    // Find next selected item that needs quantity
+    const selectedItems = detectedItems.filter(item => item.selected && !item.requiresNutritionLabel);
+    const currentSelectedIndex = selectedItems.findIndex((item, idx) =>
+      detectedItems.indexOf(item) === currentMultiItemIndex
+    );
+
+    if (currentSelectedIndex < selectedItems.length - 1) {
+      // More catalog-matched items to process
+      const nextItem = selectedItems[currentSelectedIndex + 1];
+      setCurrentMultiItemIndex(detectedItems.indexOf(nextItem));
+      setQuantityInput('');
+    } else {
+      // All catalog-matched quantities collected
+      const updatedQuantities = {
+        ...itemQuantities,
+        [currentMultiItemIndex]: quantity
+      };
+
+      if (pendingNewItems.length > 0) {
+        // Save catalog-matched items first, then process new items
+        handleMultiItemSave(updatedQuantities, true); // true = continue to new items after
+      } else {
+        // No new items, just save and finish
+        handleMultiItemSave(updatedQuantities, false);
+      }
+    }
+  };
+
+  const handleMultiItemSave = async (finalQuantities, continueToNewItems = false) => {
+    try {
+      setIsProcessingMultiItem(true);
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+
+      const { createMultiItemEvents } = require('@/utils/photoEventParser');
+
+      // Build items with quantities (only catalog-matched items)
+      const itemsToSave = detectedItems
+        .filter(item => item.selected && !item.requiresNutritionLabel)
+        .map(item => {
+          const itemIndex = detectedItems.indexOf(item);
+          return {
+            item,
+            catalogMatch: item.catalogMatch,
+            quantity: finalQuantities[itemIndex] || 1
+          };
+        });
+
+      // Only save if there are catalog-matched items
+      let savedCount = 0;
+      if (itemsToSave.length > 0) {
+        const result = await createMultiItemEvents(
+          auditId,
+          itemsToSave,
+          user.id,
+          metadata?.photo_url
+        );
+        savedCount = result.events?.length || 0;
+
+        if (!result.success && result.errors?.length > 0) {
+          console.error('Some events failed to save:', result.errors);
+        }
+      }
+
+      setIsProcessingMultiItem(false);
+
+      if (continueToNewItems && pendingNewItems.length > 0) {
+        // Show success message for catalog-matched items, then continue
+        if (savedCount > 0) {
+          Alert.alert(
+            'Items Logged',
+            `${savedCount} item${savedCount > 1 ? 's' : ''} saved. Now let's add ${pendingNewItems.length} new product${pendingNewItems.length > 1 ? 's' : ''} to your catalog.`,
+            [{
+              text: 'Continue',
+              onPress: () => {
+                setCurrentNewItemIndex(0);
+                setMultiItemStep('new_item_label');
+              }
+            }]
+          );
+        } else {
+          // No catalog items saved, go directly to new items
+          setCurrentNewItemIndex(0);
+          setMultiItemStep('new_item_label');
+        }
+      } else {
+        // All done
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        Alert.alert(
+          'Success',
+          `${savedCount} event${savedCount !== 1 ? 's' : ''} saved successfully!`,
+          [{ text: 'OK', onPress: () => router.back() }]
+        );
+      }
+    } catch (error) {
+      setIsProcessingMultiItem(false);
+      console.error('Error saving multi-item events:', error);
+      Alert.alert('Error', 'Failed to save events. Please try again.');
+    }
   };
 
   // Nutrition label capture handler
@@ -355,6 +549,203 @@ export default function ConfirmScreen() {
     }
   };
 
+  // ========== Multi-Item New Product Handlers ==========
+
+  // Capture nutrition label for a new item in multi-item mode
+  const handleMultiItemCaptureLabel = async () => {
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ['images'],
+        quality: 0.8,
+        allowsEditing: false,
+      });
+
+      if (result.canceled) {
+        return;
+      }
+
+      const labelPhotoUri = result.assets[0].uri;
+      setMultiItemStep('processing');
+      setIsProcessingLabel(true);
+
+      const currentItem = pendingNewItems[currentNewItemIndex];
+      const frontPhotoUrl = metadata?.photo_url;
+
+      const geminiApiKey = process.env.EXPO_PUBLIC_GEMINI_API_KEY;
+      if (!geminiApiKey) {
+        setIsProcessingLabel(false);
+        Alert.alert('Error', 'Gemini API key not configured.');
+        setMultiItemStep('new_item_label');
+        return;
+      }
+
+      const processResult = await processNutritionLabelPhoto(
+        labelPhotoUri,
+        currentItem,
+        frontPhotoUrl,
+        auditId,
+        user.id,
+        geminiApiKey
+      );
+
+      setIsProcessingLabel(false);
+
+      if (!processResult.success) {
+        if (processResult.needsRetake) {
+          Alert.alert(
+            'Could Not Read Label',
+            'We couldn\'t extract the nutrition information. Please take another photo with better lighting.',
+            [{ text: 'Try Again', onPress: () => setMultiItemStep('new_item_label') }]
+          );
+          return;
+        }
+        Alert.alert('Error', processResult.error || 'Failed to process nutrition label.');
+        setMultiItemStep('new_item_label');
+        return;
+      }
+
+      // Set extracted data for confirmation
+      setExtractedProductData(processResult.extractedData);
+      setLabelPhotoUrl(processResult.labelPhotoUrl);
+      setEditableProductData({
+        product_name: processResult.extractedData.product_name || currentItem?.name || '',
+        brand: processResult.extractedData.brand || currentItem?.brand || '',
+        serving_quantity: processResult.extractedData.serving_quantity?.toString() || '1',
+        serving_unit: processResult.extractedData.serving_unit || 'serving',
+        serving_weight_grams: processResult.extractedData.serving_weight_grams?.toString() || '',
+      });
+      setMultiItemStep('new_item_confirm');
+    } catch (error) {
+      console.error('Error capturing nutrition label for multi-item:', error);
+      setIsProcessingLabel(false);
+      Alert.alert('Error', 'Failed to capture nutrition label. Please try again.');
+      setMultiItemStep('new_item_label');
+    }
+  };
+
+  // Confirm extracted product data for new item in multi-item mode
+  const handleMultiItemConfirmProduct = async () => {
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+
+      const productData = {
+        ...extractedProductData,
+        product_name: editableProductData.product_name,
+        brand: editableProductData.brand,
+        serving_quantity: parseFloat(editableProductData.serving_quantity) || 1,
+        serving_unit: editableProductData.serving_unit,
+        serving_weight_grams: editableProductData.serving_weight_grams
+          ? parseFloat(editableProductData.serving_weight_grams)
+          : null,
+        front_photo_url: metadata?.photo_url,
+        label_photo_url: labelPhotoUrl,
+      };
+
+      const result = await confirmAndAddToCatalog(productData, auditId, user.id);
+
+      if (!result.success) {
+        Alert.alert('Error', result.error || 'Failed to add product to catalog.');
+        return;
+      }
+
+      setNewItemCatalogProduct(result.catalogProduct);
+      setQuantityInput('');
+      setMultiItemStep('new_item_quantity');
+    } catch (error) {
+      console.error('Error confirming new product in multi-item:', error);
+      Alert.alert('Error', 'Failed to save product. Please try again.');
+    }
+  };
+
+  // Handle quantity for new item and either continue to next or finish
+  const handleMultiItemNewItemQuantitySubmit = async (quantity) => {
+    if (!quantity || quantity <= 0) {
+      Alert.alert('Invalid Quantity', 'Please enter a valid quantity.');
+      return;
+    }
+
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+
+      const currentItem = pendingNewItems[currentNewItemIndex];
+
+      // Build event data
+      const eventData = buildSupplementEventData(
+        newItemCatalogProduct,
+        quantity,
+        false,
+        null,
+        currentItem
+      );
+
+      // Create the voice event
+      const eventTime = new Date().toISOString();
+      await createVoiceEvent(
+        user.id,
+        'supplement',
+        eventData,
+        eventTime,
+        auditId,
+        'photo'
+      );
+
+      // Check if there are more new items
+      if (currentNewItemIndex < pendingNewItems.length - 1) {
+        // Move to next new item
+        setCurrentNewItemIndex(currentNewItemIndex + 1);
+        setNewItemCatalogProduct(null);
+        setExtractedProductData(null);
+        setEditableProductData({
+          product_name: '',
+          brand: '',
+          serving_quantity: '1',
+          serving_unit: 'serving',
+          serving_weight_grams: '',
+        });
+        setQuantityInput('');
+        setMultiItemStep('new_item_label');
+      } else {
+        // All done!
+        await updateAuditStatus(auditId, 'awaiting_user_clarification_success');
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+
+        const totalItems = detectedItems.filter(i => i.selected).length;
+        Alert.alert(
+          'All Done!',
+          `${totalItems} supplement${totalItems !== 1 ? 's' : ''} logged successfully!`,
+          [{ text: 'OK', onPress: () => router.back() }]
+        );
+      }
+    } catch (error) {
+      console.error('Error saving new item event:', error);
+      Alert.alert('Error', 'Failed to save event. Please try again.');
+    }
+  };
+
+  // Skip current new item and move to next (or finish)
+  const handleSkipNewItem = () => {
+    if (currentNewItemIndex < pendingNewItems.length - 1) {
+      setCurrentNewItemIndex(currentNewItemIndex + 1);
+      setNewItemCatalogProduct(null);
+      setExtractedProductData(null);
+      setQuantityInput('');
+      setMultiItemStep('new_item_label');
+    } else {
+      // No more items, finish
+      const savedCount = detectedItems.filter(i => i.selected && !i.requiresNutritionLabel).length;
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      Alert.alert(
+        'Done',
+        savedCount > 0
+          ? `${savedCount} item${savedCount !== 1 ? 's' : ''} were logged. Skipped items can be added individually later.`
+          : 'No items were logged.',
+        [{ text: 'OK', onPress: () => router.back() }]
+      );
+    }
+  };
+
   // Format micros for display
   const formatMicros = (micros) => {
     if (!micros || typeof micros !== 'object') return [];
@@ -392,6 +783,679 @@ export default function ConfirmScreen() {
           paddingBottom: insets.bottom + 24,
         }}
       >
+        {/* Multi-Item Mode UI */}
+        {isMultiItemMode && multiItemStep === 'selection' && (
+          <View style={{ marginBottom: 24 }}>
+            {/* Header */}
+            <View style={{
+              backgroundColor: colors.cardBackground,
+              borderRadius: 16,
+              padding: 20,
+              marginBottom: 16,
+            }}>
+              <Text style={{
+                fontSize: 20,
+                fontFamily: 'Poppins_600SemiBold',
+                color: colors.text,
+                marginBottom: 8,
+              }}>
+                {detectedItems.length} Items Detected
+              </Text>
+              <Text style={{
+                fontSize: 14,
+                fontFamily: 'Poppins_400Regular',
+                color: colors.textSecondary,
+              }}>
+                Select the items you want to log
+              </Text>
+
+              {/* Select All / Deselect All buttons */}
+              <View style={{ flexDirection: 'row', marginTop: 16, gap: 12 }}>
+                <TouchableOpacity
+                  onPress={handleSelectAllItems}
+                  style={{
+                    flex: 1,
+                    paddingVertical: 8,
+                    paddingHorizontal: 12,
+                    borderRadius: 8,
+                    borderWidth: 1,
+                    borderColor: colors.primary,
+                  }}
+                >
+                  <Text style={{
+                    fontSize: 14,
+                    fontFamily: 'Poppins_500Medium',
+                    color: colors.primary,
+                    textAlign: 'center',
+                  }}>
+                    Select All
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={handleDeselectAllItems}
+                  style={{
+                    flex: 1,
+                    paddingVertical: 8,
+                    paddingHorizontal: 12,
+                    borderRadius: 8,
+                    borderWidth: 1,
+                    borderColor: colors.textSecondary,
+                  }}
+                >
+                  <Text style={{
+                    fontSize: 14,
+                    fontFamily: 'Poppins_500Medium',
+                    color: colors.textSecondary,
+                    textAlign: 'center',
+                  }}>
+                    Deselect All
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {/* Item List */}
+            {detectedItems.map((item, index) => (
+              <TouchableOpacity
+                key={index}
+                onPress={() => handleToggleItemSelection(index)}
+                style={{
+                  backgroundColor: colors.cardBackground,
+                  borderRadius: 12,
+                  padding: 16,
+                  marginBottom: 12,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  borderWidth: 2,
+                  borderColor: item.selected ? colors.primary : 'transparent',
+                }}
+              >
+                {/* Checkbox */}
+                <View style={{
+                  width: 24,
+                  height: 24,
+                  borderRadius: 6,
+                  borderWidth: 2,
+                  borderColor: item.selected ? colors.primary : colors.textSecondary,
+                  backgroundColor: item.selected ? colors.primary : 'transparent',
+                  marginRight: 12,
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                }}>
+                  {item.selected && (
+                    <Text style={{ color: '#fff', fontSize: 14, fontWeight: 'bold' }}>✓</Text>
+                  )}
+                </View>
+
+                {/* Item Info */}
+                <View style={{ flex: 1 }}>
+                  <Text style={{
+                    fontSize: 16,
+                    fontFamily: 'Poppins_600SemiBold',
+                    color: colors.text,
+                  }}>
+                    {item.name}
+                  </Text>
+                  <Text style={{
+                    fontSize: 14,
+                    fontFamily: 'Poppins_400Regular',
+                    color: colors.textSecondary,
+                  }}>
+                    {item.brand}
+                  </Text>
+                </View>
+
+                {/* Status Badge */}
+                <View style={{
+                  paddingVertical: 4,
+                  paddingHorizontal: 8,
+                  borderRadius: 6,
+                  backgroundColor: item.catalogMatch ? '#10B98120' : '#F59E0B20',
+                }}>
+                  <Text style={{
+                    fontSize: 12,
+                    fontFamily: 'Poppins_500Medium',
+                    color: item.catalogMatch ? '#10B981' : '#F59E0B',
+                  }}>
+                    {item.catalogMatch ? 'In Catalog' : 'New'}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            ))}
+
+            {/* Proceed Button */}
+            <TouchableOpacity
+              onPress={handleMultiItemProceed}
+              style={{
+                backgroundColor: colors.primary,
+                borderRadius: 12,
+                paddingVertical: 16,
+                marginTop: 8,
+              }}
+            >
+              <Text style={{
+                fontSize: 16,
+                fontFamily: 'Poppins_600SemiBold',
+                color: '#fff',
+                textAlign: 'center',
+              }}>
+                Continue ({detectedItems.filter(i => i.selected).length} selected)
+              </Text>
+            </TouchableOpacity>
+
+            {/* Cancel Button */}
+            <TouchableOpacity
+              onPress={handleCancel}
+              style={{
+                paddingVertical: 12,
+                marginTop: 8,
+              }}
+            >
+              <Text style={{
+                fontSize: 14,
+                fontFamily: 'Poppins_500Medium',
+                color: colors.textSecondary,
+                textAlign: 'center',
+              }}>
+                Cancel
+              </Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* Multi-Item Quantity Collection */}
+        {isMultiItemMode && multiItemStep === 'quantity' && (
+          <View style={{ marginBottom: 24 }}>
+            <View style={{
+              backgroundColor: colors.cardBackground,
+              borderRadius: 16,
+              padding: 24,
+            }}>
+              {/* Progress Indicator */}
+              <Text style={{
+                fontSize: 12,
+                fontFamily: 'Poppins_500Medium',
+                color: colors.textSecondary,
+                marginBottom: 8,
+              }}>
+                Item {detectedItems.filter((_, i) => i <= currentMultiItemIndex && detectedItems[i].selected && !detectedItems[i].requiresNutritionLabel).length} of {detectedItems.filter(i => i.selected && !i.requiresNutritionLabel).length}
+              </Text>
+
+              {/* Current Item */}
+              <Text style={{
+                fontSize: 20,
+                fontFamily: 'Poppins_600SemiBold',
+                color: colors.text,
+                marginBottom: 4,
+              }}>
+                {detectedItems[currentMultiItemIndex]?.name}
+              </Text>
+              <Text style={{
+                fontSize: 14,
+                fontFamily: 'Poppins_400Regular',
+                color: colors.textSecondary,
+                marginBottom: 24,
+              }}>
+                {detectedItems[currentMultiItemIndex]?.brand}
+              </Text>
+
+              {/* Quantity Question */}
+              <Text style={{
+                fontSize: 16,
+                fontFamily: 'Poppins_500Medium',
+                color: colors.text,
+                marginBottom: 16,
+              }}>
+                How many {detectedItems[currentMultiItemIndex]?.form || 'units'} did you take?
+              </Text>
+
+              {/* Quick Select Buttons */}
+              <View style={{ flexDirection: 'row', gap: 12, marginBottom: 16 }}>
+                {[1, 2, 3].map(num => (
+                  <TouchableOpacity
+                    key={num}
+                    onPress={() => handleMultiItemQuantitySubmit(num)}
+                    style={{
+                      flex: 1,
+                      paddingVertical: 16,
+                      borderRadius: 12,
+                      backgroundColor: colors.primary + '20',
+                      borderWidth: 1,
+                      borderColor: colors.primary,
+                    }}
+                  >
+                    <Text style={{
+                      fontSize: 20,
+                      fontFamily: 'Poppins_600SemiBold',
+                      color: colors.primary,
+                      textAlign: 'center',
+                    }}>
+                      {num}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              {/* Custom Input */}
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                <TextInput
+                  value={quantityInput}
+                  onChangeText={setQuantityInput}
+                  placeholder="Other amount"
+                  placeholderTextColor={colors.textSecondary}
+                  keyboardType="numeric"
+                  style={{
+                    flex: 1,
+                    height: 48,
+                    borderWidth: 1,
+                    borderColor: colors.border,
+                    borderRadius: 12,
+                    paddingHorizontal: 16,
+                    fontSize: 16,
+                    fontFamily: 'Poppins_400Regular',
+                    color: colors.text,
+                    backgroundColor: colors.inputBackground,
+                  }}
+                />
+                <TouchableOpacity
+                  onPress={() => handleMultiItemQuantitySubmit(parseInt(quantityInput) || 0)}
+                  disabled={!quantityInput}
+                  style={{
+                    paddingHorizontal: 20,
+                    paddingVertical: 12,
+                    borderRadius: 12,
+                    backgroundColor: quantityInput ? colors.primary : colors.primary + '40',
+                  }}
+                >
+                  <Text style={{
+                    fontSize: 16,
+                    fontFamily: 'Poppins_600SemiBold',
+                    color: '#fff',
+                  }}>
+                    Next
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        )}
+
+        {/* Multi-Item Processing */}
+        {isMultiItemMode && (isProcessingMultiItem || multiItemStep === 'processing') && (
+          <View style={{
+            padding: 48,
+            justifyContent: 'center',
+            alignItems: 'center',
+          }}>
+            <ActivityIndicator size="large" color={colors.primary} />
+            <Text style={{
+              fontSize: 16,
+              fontFamily: 'Poppins_500Medium',
+              color: colors.text,
+              marginTop: 16,
+            }}>
+              {isProcessingLabel ? 'Processing label...' : 'Saving events...'}
+            </Text>
+          </View>
+        )}
+
+        {/* Multi-Item New Product: Label Capture */}
+        {isMultiItemMode && multiItemStep === 'new_item_label' && pendingNewItems.length > 0 && (
+          <View style={{ marginBottom: 24 }}>
+            <View style={{
+              backgroundColor: colors.cardBackground,
+              borderRadius: 16,
+              padding: 24,
+              borderWidth: 2,
+              borderColor: colors.primary,
+            }}>
+              {/* Progress */}
+              <Text style={{
+                fontSize: 12,
+                fontFamily: 'Poppins_500Medium',
+                color: colors.textSecondary,
+                marginBottom: 8,
+              }}>
+                New Product {currentNewItemIndex + 1} of {pendingNewItems.length}
+              </Text>
+
+              <Text style={{
+                fontSize: 18,
+                fontFamily: 'Poppins_600SemiBold',
+                color: colors.text,
+                marginBottom: 4,
+              }}>
+                {pendingNewItems[currentNewItemIndex]?.name}
+              </Text>
+              <Text style={{
+                fontSize: 14,
+                fontFamily: 'Poppins_400Regular',
+                color: colors.textSecondary,
+                marginBottom: 16,
+              }}>
+                {pendingNewItems[currentNewItemIndex]?.brand}
+              </Text>
+
+              <Text style={{
+                fontSize: 14,
+                fontFamily: 'Poppins_400Regular',
+                color: colors.text,
+                marginBottom: 20,
+                textAlign: 'center',
+              }}>
+                This product isn't in your catalog yet. Take a photo of the nutrition/supplement facts label to add it.
+              </Text>
+
+              <TouchableOpacity
+                onPress={handleMultiItemCaptureLabel}
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  backgroundColor: colors.primary,
+                  paddingVertical: 16,
+                  borderRadius: 12,
+                  marginBottom: 12,
+                }}
+              >
+                <Ionicons name="camera" size={24} color="#fff" style={{ marginRight: 8 }} />
+                <Text style={{
+                  fontSize: 16,
+                  fontFamily: 'Poppins_600SemiBold',
+                  color: '#fff',
+                }}>
+                  Take Photo of Label
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                onPress={handleSkipNewItem}
+                style={{
+                  paddingVertical: 12,
+                  alignItems: 'center',
+                }}
+              >
+                <Text style={{
+                  fontSize: 14,
+                  fontFamily: 'Poppins_500Medium',
+                  color: colors.textSecondary,
+                }}>
+                  Skip this item
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+
+        {/* Multi-Item New Product: Confirm Extracted Data */}
+        {isMultiItemMode && multiItemStep === 'new_item_confirm' && extractedProductData && (
+          <View style={{ marginBottom: 24 }}>
+            <View style={{
+              backgroundColor: colors.cardBackground,
+              borderRadius: 16,
+              padding: 24,
+            }}>
+              <Text style={{
+                fontSize: 12,
+                fontFamily: 'Poppins_500Medium',
+                color: colors.textSecondary,
+                marginBottom: 8,
+              }}>
+                New Product {currentNewItemIndex + 1} of {pendingNewItems.length}
+              </Text>
+
+              <Text style={{
+                fontSize: 18,
+                fontFamily: 'Poppins_600SemiBold',
+                color: colors.text,
+                marginBottom: 16,
+              }}>
+                Confirm Product Details
+              </Text>
+
+              {/* Editable Fields */}
+              <View style={{ marginBottom: 16 }}>
+                <Text style={{ fontSize: 12, fontFamily: 'Poppins_500Medium', color: colors.textSecondary, marginBottom: 4 }}>
+                  Product Name
+                </Text>
+                <TextInput
+                  value={editableProductData.product_name}
+                  onChangeText={(text) => setEditableProductData(prev => ({ ...prev, product_name: text }))}
+                  style={{
+                    borderWidth: 1,
+                    borderColor: colors.border,
+                    borderRadius: 8,
+                    paddingHorizontal: 12,
+                    paddingVertical: 10,
+                    fontSize: 16,
+                    fontFamily: 'Poppins_400Regular',
+                    color: colors.text,
+                    backgroundColor: colors.inputBackground,
+                  }}
+                />
+              </View>
+
+              <View style={{ marginBottom: 16 }}>
+                <Text style={{ fontSize: 12, fontFamily: 'Poppins_500Medium', color: colors.textSecondary, marginBottom: 4 }}>
+                  Brand
+                </Text>
+                <TextInput
+                  value={editableProductData.brand}
+                  onChangeText={(text) => setEditableProductData(prev => ({ ...prev, brand: text }))}
+                  style={{
+                    borderWidth: 1,
+                    borderColor: colors.border,
+                    borderRadius: 8,
+                    paddingHorizontal: 12,
+                    paddingVertical: 10,
+                    fontSize: 16,
+                    fontFamily: 'Poppins_400Regular',
+                    color: colors.text,
+                    backgroundColor: colors.inputBackground,
+                  }}
+                />
+              </View>
+
+              <View style={{ flexDirection: 'row', gap: 12, marginBottom: 16 }}>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ fontSize: 12, fontFamily: 'Poppins_500Medium', color: colors.textSecondary, marginBottom: 4 }}>
+                    Serving Size
+                  </Text>
+                  <TextInput
+                    value={editableProductData.serving_quantity}
+                    onChangeText={(text) => setEditableProductData(prev => ({ ...prev, serving_quantity: text }))}
+                    keyboardType="numeric"
+                    style={{
+                      borderWidth: 1,
+                      borderColor: colors.border,
+                      borderRadius: 8,
+                      paddingHorizontal: 12,
+                      paddingVertical: 10,
+                      fontSize: 16,
+                      fontFamily: 'Poppins_400Regular',
+                      color: colors.text,
+                      backgroundColor: colors.inputBackground,
+                    }}
+                  />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ fontSize: 12, fontFamily: 'Poppins_500Medium', color: colors.textSecondary, marginBottom: 4 }}>
+                    Unit
+                  </Text>
+                  <TextInput
+                    value={editableProductData.serving_unit}
+                    onChangeText={(text) => setEditableProductData(prev => ({ ...prev, serving_unit: text }))}
+                    style={{
+                      borderWidth: 1,
+                      borderColor: colors.border,
+                      borderRadius: 8,
+                      paddingHorizontal: 12,
+                      paddingVertical: 10,
+                      fontSize: 16,
+                      fontFamily: 'Poppins_400Regular',
+                      color: colors.text,
+                      backgroundColor: colors.inputBackground,
+                    }}
+                  />
+                </View>
+              </View>
+
+              {/* Nutrients Preview */}
+              {extractedProductData.micros && Object.keys(extractedProductData.micros).length > 0 && (
+                <View style={{ marginBottom: 16 }}>
+                  <Text style={{ fontSize: 12, fontFamily: 'Poppins_500Medium', color: colors.textSecondary, marginBottom: 8 }}>
+                    Nutrients Detected
+                  </Text>
+                  <View style={{ backgroundColor: colors.background, borderRadius: 8, padding: 12 }}>
+                    {Object.entries(extractedProductData.micros).slice(0, 5).map(([name, value]) => (
+                      <Text key={name} style={{ fontSize: 14, fontFamily: 'Poppins_400Regular', color: colors.text }}>
+                        {name}: {value.amount} {value.unit}
+                      </Text>
+                    ))}
+                    {Object.keys(extractedProductData.micros).length > 5 && (
+                      <Text style={{ fontSize: 12, fontFamily: 'Poppins_400Regular', color: colors.textSecondary, marginTop: 4 }}>
+                        +{Object.keys(extractedProductData.micros).length - 5} more
+                      </Text>
+                    )}
+                  </View>
+                </View>
+              )}
+
+              <TouchableOpacity
+                onPress={handleMultiItemConfirmProduct}
+                style={{
+                  backgroundColor: colors.primary,
+                  paddingVertical: 16,
+                  borderRadius: 12,
+                  alignItems: 'center',
+                }}
+              >
+                <Text style={{
+                  fontSize: 16,
+                  fontFamily: 'Poppins_600SemiBold',
+                  color: '#fff',
+                }}>
+                  Add to Catalog
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+
+        {/* Multi-Item New Product: Quantity */}
+        {isMultiItemMode && multiItemStep === 'new_item_quantity' && newItemCatalogProduct && (
+          <View style={{ marginBottom: 24 }}>
+            <View style={{
+              backgroundColor: colors.cardBackground,
+              borderRadius: 16,
+              padding: 24,
+            }}>
+              <Text style={{
+                fontSize: 12,
+                fontFamily: 'Poppins_500Medium',
+                color: colors.textSecondary,
+                marginBottom: 8,
+              }}>
+                New Product {currentNewItemIndex + 1} of {pendingNewItems.length}
+              </Text>
+
+              <Text style={{
+                fontSize: 20,
+                fontFamily: 'Poppins_600SemiBold',
+                color: colors.text,
+                marginBottom: 4,
+              }}>
+                {newItemCatalogProduct.product_name}
+              </Text>
+              <Text style={{
+                fontSize: 14,
+                fontFamily: 'Poppins_400Regular',
+                color: colors.textSecondary,
+                marginBottom: 24,
+              }}>
+                {newItemCatalogProduct.brand}
+              </Text>
+
+              <Text style={{
+                fontSize: 16,
+                fontFamily: 'Poppins_500Medium',
+                color: colors.text,
+                marginBottom: 16,
+              }}>
+                How many {newItemCatalogProduct.serving_unit || 'servings'} did you take?
+              </Text>
+
+              {/* Quick Select Buttons */}
+              <View style={{ flexDirection: 'row', gap: 12, marginBottom: 16 }}>
+                {[1, 2, 3].map(num => (
+                  <TouchableOpacity
+                    key={num}
+                    onPress={() => handleMultiItemNewItemQuantitySubmit(num)}
+                    style={{
+                      flex: 1,
+                      paddingVertical: 16,
+                      borderRadius: 12,
+                      backgroundColor: colors.primary + '20',
+                      borderWidth: 1,
+                      borderColor: colors.primary,
+                    }}
+                  >
+                    <Text style={{
+                      fontSize: 20,
+                      fontFamily: 'Poppins_600SemiBold',
+                      color: colors.primary,
+                      textAlign: 'center',
+                    }}>
+                      {num}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              {/* Custom Input */}
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                <TextInput
+                  value={quantityInput}
+                  onChangeText={setQuantityInput}
+                  placeholder="Other amount"
+                  placeholderTextColor={colors.textSecondary}
+                  keyboardType="numeric"
+                  style={{
+                    flex: 1,
+                    height: 48,
+                    borderWidth: 1,
+                    borderColor: colors.border,
+                    borderRadius: 12,
+                    paddingHorizontal: 16,
+                    fontSize: 16,
+                    fontFamily: 'Poppins_400Regular',
+                    color: colors.text,
+                    backgroundColor: colors.inputBackground,
+                  }}
+                />
+                <TouchableOpacity
+                  onPress={() => handleMultiItemNewItemQuantitySubmit(parseInt(quantityInput) || 0)}
+                  disabled={!quantityInput}
+                  style={{
+                    paddingHorizontal: 20,
+                    paddingVertical: 12,
+                    borderRadius: 12,
+                    backgroundColor: quantityInput ? colors.primary : colors.primary + '40',
+                  }}
+                >
+                  <Text style={{
+                    fontSize: 16,
+                    fontFamily: 'Poppins_600SemiBold',
+                    color: '#fff',
+                  }}>
+                    {currentNewItemIndex < pendingNewItems.length - 1 ? 'Next' : 'Done'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        )}
+
         {/* Nutrition Label Capture Flow */}
         {requiresNutritionLabel && nutritionLabelStep === 'capture' && (
           <View
@@ -889,8 +1953,8 @@ export default function ConfirmScreen() {
           </View>
         )}
 
-        {/* Original content - only show when not in nutrition label flow */}
-        {!requiresNutritionLabel && (
+        {/* Original content - only show when not in nutrition label flow AND not in multi-item mode */}
+        {!requiresNutritionLabel && !isMultiItemMode && (
           <>
         {/* Product Search Results Section */}
         {productOptions && Array.isArray(productOptions) && productOptions.length === 0 && (

@@ -334,7 +334,7 @@ export default function HomeScreen() {
           throw new Error(result.error || 'Failed to process photo');
         }
 
-        // Navigate to confirmation screen
+        // Navigate to confirmation screen with multi-item support
         router.push({
           pathname: "/confirm",
           params: {
@@ -344,6 +344,12 @@ export default function HomeScreen() {
             missingFields: JSON.stringify(result.missingFields || []),
             confidence: result.parsed.confidence?.toString() || null,
             metadata: JSON.stringify({
+              // Multi-item support
+              is_multi_item: result.isMultiItem || false,
+              detected_items: result.detectedItems || null,
+              matched_count: result.matchedCount || 0,
+              needs_label_count: result.needsLabelCount || 0,
+              // Single item support (backwards compatible)
               requires_nutrition_label: result.requiresNutritionLabel || false,
               follow_up_question: result.followUpQuestion,
               follow_up_field: 'quantity',

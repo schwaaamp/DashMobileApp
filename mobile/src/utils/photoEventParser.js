@@ -2,14 +2,15 @@
  * Photo Event Parser
  *
  * Orchestrates photo capture → event creation flow with automatic catalog building.
+ * Supports multiple supplements in a single photo.
  *
  * Flow:
- * 1. User takes photo of supplement/food/medication bottle
- * 2. Attempt barcode detection (instant match)
- * 3. If no barcode or no match, use Gemini Vision OCR
- * 4. Search product catalog for match
- * 5. If found: ask quantity, create event
- * 6. If not found: 2-photo flow (front + nutrition), add to catalog, then create event
+ * 1. User takes photo of supplement/food/medication bottle(s)
+ * 2. Gemini Vision detects ALL products in photo
+ * 3. Search product catalog for each item
+ * 4. For items with catalog match: ask quantity, create event
+ * 5. For items without match: 2-photo flow (front + nutrition), add to catalog, then create event
+ * 6. User selects which items to log, enters quantities for each
  */
 
 import { analyzeSupplementPhoto, uploadPhotoToSupabase, generateFollowUpQuestion } from './photoAnalysis';
@@ -81,8 +82,66 @@ async function findCatalogMatch(photoUri, productName, brand, userId, geminiApiK
 }
 
 /**
+ * Find catalog match by text search only (no barcode detection)
+ * Used for multi-item lookups where barcode was already attempted
+ *
+ * @param {string} productName - Product name
+ * @param {string} brand - Brand name
+ * @param {string} userId - User ID
+ * @returns {Promise<Object|null>} Catalog match or null
+ */
+async function findCatalogMatchByText(productName, brand, userId) {
+  try {
+    const searchQuery = brand ? `${brand} ${productName}` : productName;
+    const searchResults = await searchProductCatalog(searchQuery, userId, 5);
+
+    if (searchResults.length === 0) {
+      return null;
+    }
+
+    const bestMatch = searchResults[0];
+
+    // Return the best match - searchProductCatalog already sorts by popularity (times_logged)
+    // No need to check search_rank as it's not returned by the database query
+    return {
+      ...bestMatch,
+      matchMethod: 'text_search'
+    };
+  } catch (error) {
+    console.error('[photoEventParser] Error in text search:', error);
+    return null;
+  }
+}
+
+/**
+ * Find catalog matches for multiple items in parallel
+ *
+ * @param {Array} items - Detected items from Gemini Vision
+ * @param {string} userId - User ID
+ * @returns {Promise<Array>} Array of {item, catalogMatch, requiresNutritionLabel}
+ */
+async function findCatalogMatchesForItems(items, userId) {
+  const results = await Promise.all(
+    items.map(async (item) => {
+      const catalogMatch = await findCatalogMatchByText(item.name, item.brand, userId);
+      const requiresNutritionLabel = !catalogMatch &&
+        (item.event_type === 'supplement' || item.event_type === 'medication' || item.event_type === 'food');
+
+      return {
+        item,
+        catalogMatch,
+        requiresNutritionLabel
+      };
+    })
+  );
+
+  return results;
+}
+
+/**
  * Main photo → event processing function
  * Orchestrates: photo upload → Gemini analysis → catalog lookup → event creation
+ * Supports multiple items in a single photo.
  *
  * @param {string} photoPath - Local photo URI
  * @param {string} userId - User ID
@@ -121,79 +180,105 @@ export async function processPhotoInput(photoPath, userId, apiKey, captureMethod
 
     console.log(`[photoEventParser] Detected ${analysis.items.length} item(s):`, analysis.items);
 
-    // Step 3: Process FIRST item only (multi-item will be Phase 6)
-    const detectedItem = analysis.items[0];
-    const { name, brand, form, event_type } = detectedItem;
+    // Step 3: Find catalog matches for ALL items in parallel
+    console.log('[photoEventParser] Searching product catalog for all items...');
+    const itemsWithMatches = await findCatalogMatchesForItems(analysis.items, userId);
 
-    // Step 4: Search product catalog for match (barcode-first, then text)
-    console.log('[photoEventParser] Searching product catalog...');
-    const catalogMatch = await findCatalogMatch(photoPath, name, brand, userId, apiKey);
+    // Log match results
+    const matchedCount = itemsWithMatches.filter(i => i.catalogMatch).length;
+    const needsLabelCount = itemsWithMatches.filter(i => i.requiresNutritionLabel).length;
+    console.log(`[photoEventParser] Catalog matches: ${matchedCount}/${analysis.items.length}, needs label: ${needsLabelCount}`);
 
-    let productCatalogId = null;
-    let servingSize = null;
-    let nutrients = null;
-
-    // Determine if we need nutrition label photo (for new products)
-    const requiresNutritionLabel = !catalogMatch &&
-      (event_type === 'supplement' || event_type === 'medication' || event_type === 'food');
-
-    if (catalogMatch) {
-      console.log('[photoEventParser] ✓ Found catalog match:', catalogMatch.product_name);
-      productCatalogId = catalogMatch.id;
-      servingSize = catalogMatch.serving_size;
-      nutrients = catalogMatch.micros; // Use micros field from catalog
-
-      // Increment usage counter
-      await incrementProductUsage(productCatalogId);
-    } else if (requiresNutritionLabel) {
-      console.log('[photoEventParser] No catalog match found. Will require nutrition label photo.');
-    } else {
-      console.log('[photoEventParser] No catalog match found. Will create event without catalog link.');
+    // Increment usage counters for matched items
+    for (const { catalogMatch } of itemsWithMatches) {
+      if (catalogMatch) {
+        await incrementProductUsage(catalogMatch.id);
+      }
     }
 
-    // Step 5: Create audit record
+    // Step 4: Create audit record with all items
+    const firstItem = analysis.items[0];
     console.log('[photoEventParser] Creating audit record...');
     const auditRecord = await createAuditRecord(
       userId,
-      `[Photo: ${name}${brand ? ` by ${brand}` : ''}]`, // Descriptive text for photo events
-      event_type, // eventType
-      null, // value
-      null, // units
-      'gemini-2.0-flash-exp', // nlpModel
+      `[Photo: ${analysis.items.length} item(s) detected]`,
+      firstItem.event_type,
+      null,
+      null,
+      'gemini-2.0-flash-exp',
       {
         photo_url: photoUrl,
         detected_items: analysis.items,
+        items_with_matches: itemsWithMatches.map(({ item, catalogMatch, requiresNutritionLabel }) => ({
+          name: item.name,
+          brand: item.brand,
+          event_type: item.event_type,
+          catalog_match: catalogMatch ? {
+            product_id: catalogMatch.id,
+            product_name: catalogMatch.product_name,
+            brand: catalogMatch.brand,
+            match_method: catalogMatch.matchMethod
+          } : null,
+          requires_nutrition_label: requiresNutritionLabel
+        })),
         confidence: analysis.confidence,
         capture_method: captureMethod,
-        gemini_model: 'gemini-2.0-flash-exp',
-        catalog_match: catalogMatch ? {
-          product_id: productCatalogId,
-          product_name: catalogMatch.product_name,
-          brand: catalogMatch.brand,
-          match_method: catalogMatch.matchMethod
-        } : null
+        gemini_model: 'gemini-2.0-flash-exp'
       }
     );
 
     const auditId = auditRecord.id;
     console.log('[photoEventParser] Audit record created:', auditId);
 
-    // Step 6: Build event data structure
+    // Step 5: Build response based on number of items detected
+    const isMultiItem = analysis.items.length > 1;
+
+    if (isMultiItem) {
+      // Multi-item flow: return all items for selection UI
+      return {
+        success: true,
+        isMultiItem: true,
+        parsed: {
+          event_type: 'multiple', // Special type for multi-item
+          confidence: analysis.confidence,
+          complete: false
+        },
+        auditId,
+        photoUrl,
+        complete: false,
+        // All items with their catalog match status
+        detectedItems: itemsWithMatches.map(({ item, catalogMatch, requiresNutritionLabel }) => ({
+          ...item,
+          catalogMatch,
+          requiresNutritionLabel,
+          selected: true // Default all selected
+        })),
+        // Summary stats
+        matchedCount,
+        needsLabelCount
+      };
+    }
+
+    // Single item flow (backwards compatible)
+    const { item: detectedItem, catalogMatch, requiresNutritionLabel } = itemsWithMatches[0];
+    const { name, brand, form, event_type } = detectedItem;
+
+    // Build event data for single item
     const eventData = buildEventDataFromDetection(
       detectedItem,
-      productCatalogId,
-      servingSize,
-      nutrients
+      catalogMatch?.id || null,
+      catalogMatch?.serving_size || null,
+      catalogMatch?.micros || null
     );
 
-    // Step 7: Generate follow-up question for quantity
+    // Generate follow-up question for quantity
     const followUpQuestion = generateQuantityQuestion(name, form || 'capsules');
 
-    // Step 8: Return incomplete event for confirmation screen
-    // If no catalog match, require nutrition label photo first
+    // Return incomplete event for confirmation screen
     if (requiresNutritionLabel) {
       return {
         success: true,
+        isMultiItem: false,
         requiresNutritionLabel: true,
         parsed: {
           event_type,
@@ -202,7 +287,7 @@ export async function processPhotoInput(photoPath, userId, apiKey, captureMethod
           complete: false
         },
         auditId,
-        photoUrl, // Front photo URL - save for catalog entry
+        photoUrl,
         complete: false,
         detectedItem,
         catalogMatch: null
@@ -212,6 +297,7 @@ export async function processPhotoInput(photoPath, userId, apiKey, captureMethod
     // Catalog match found - just need quantity
     return {
       success: true,
+      isMultiItem: false,
       requiresNutritionLabel: false,
       parsed: {
         event_type,
@@ -611,5 +697,73 @@ export function buildSupplementEventData(
     unit: catalogProduct.serving_unit,
     calculated_nutrients: calculatedNutrients,
     is_manual_override: isManualOverride
+  };
+}
+
+/**
+ * Create events for multiple items from a single photo
+ * Used after user has selected items and entered quantities
+ *
+ * @param {string} auditId - Audit record ID
+ * @param {Array} itemsWithQuantities - Array of {item, catalogMatch, quantity}
+ * @param {string} userId - User ID
+ * @param {string} photoUrl - Photo URL
+ * @returns {Promise<{success: boolean, events: Array, errors: Array}>}
+ */
+export async function createMultiItemEvents(auditId, itemsWithQuantities, userId, photoUrl) {
+  const events = [];
+  const errors = [];
+
+  for (const { item, catalogMatch, quantity } of itemsWithQuantities) {
+    try {
+      // Build event data
+      const eventData = buildSupplementEventData(
+        catalogMatch,
+        quantity,
+        false,
+        null,
+        item
+      );
+
+      // Add photo URL to event data
+      eventData.photo_url = photoUrl;
+
+      // Create voice_events entry
+      const eventRecord = await createVoiceEvent(
+        userId,
+        item.event_type,
+        eventData,
+        new Date().toISOString(),
+        auditId,
+        'photo'
+      );
+
+      events.push({
+        ...eventRecord,
+        itemName: item.name,
+        itemBrand: item.brand
+      });
+
+      console.log(`[photoEventParser] ✓ Created event for ${item.name}`);
+    } catch (error) {
+      console.error(`[photoEventParser] Error creating event for ${item.name}:`, error);
+      errors.push({
+        item: item.name,
+        error: error.message
+      });
+    }
+  }
+
+  // Update audit status
+  await updateAuditStatus(auditId, 'multi_item_events_created', {
+    total_items: itemsWithQuantities.length,
+    events_created: events.length,
+    errors: errors.length > 0 ? errors : undefined
+  });
+
+  return {
+    success: errors.length === 0,
+    events,
+    errors
   };
 }
