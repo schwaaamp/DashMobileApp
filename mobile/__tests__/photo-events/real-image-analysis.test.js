@@ -50,10 +50,20 @@ jest.mock('../../src/utils/supabaseClient', () => ({
 }));
 
 // Mock product catalog functions (to avoid database dependency)
+// Return a catalog match to trigger the quantity flow (not nutrition label flow)
 jest.mock('../../src/utils/productCatalog', () => ({
   detectBarcode: jest.fn().mockResolvedValue({ success: false, barcode: null }),
   lookupByBarcode: jest.fn().mockResolvedValue(null),
-  searchProductCatalog: jest.fn().mockResolvedValue([]),
+  searchProductCatalog: jest.fn().mockResolvedValue([{
+    id: 'catalog-now-magtein',
+    product_name: 'Magtein Magnesium L-Threonate',
+    brand: 'NOW Foods',
+    product_type: 'supplement',
+    serving_quantity: 3,
+    serving_unit: 'capsule',
+    micros: { magnesium: { amount: 144, unit: 'mg' } },
+    search_rank: 0.9
+  }]),
   incrementProductUsage: jest.fn().mockResolvedValue(true)
 }));
 

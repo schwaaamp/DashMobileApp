@@ -81,57 +81,6 @@ async function findCatalogMatch(photoUri, productName, brand, userId, geminiApiK
 }
 
 /**
- * Calculate dosage from quantity taken and catalog serving size
- * @param {number} quantityTaken - Number of capsules/tablets taken
- * @param {Object} servingSize - Serving size from catalog {quantity, unit, grams}
- * @param {Object} nutrients - Nutrients JSONB from catalog
- * @returns {Object} Calculated dosage info {dosage, units}
- */
-function calculateDosageFromQuantity(quantityTaken, servingSize, nutrients) {
-  try {
-    if (!servingSize || !nutrients) {
-      return { dosage: quantityTaken.toString(), units: 'capsules' };
-    }
-
-    const servingQuantity = servingSize.quantity || 1;
-
-    console.log(`[photoEventParser] Calculating dosage: ${quantityTaken} taken / ${servingQuantity} per serving`);
-
-    // Calculate dosage multiplier
-    const multiplier = quantityTaken / servingQuantity;
-
-    // Find primary nutrient (supplement-specific nutrients take priority)
-    const priorityNutrients = [
-      'magnesium', 'vitamin_d', 'vitamin_c', 'calcium', 'zinc',
-      'iron', 'omega_3', 'protein', 'caffeine'
-    ];
-
-    for (const nutrient of priorityNutrients) {
-      if (nutrients[nutrient] && nutrients[nutrient] > 0) {
-        const dosage = Math.round(nutrients[nutrient] * multiplier);
-        console.log(`[photoEventParser] Calculated ${nutrient}: ${dosage}mg`);
-        return {
-          dosage: dosage.toString(),
-          units: 'mg'
-        };
-      }
-    }
-
-    // Fallback: use quantity
-    return {
-      dosage: quantityTaken.toString(),
-      units: servingSize.unit || 'capsules'
-    };
-  } catch (error) {
-    console.error('[photoEventParser] Error calculating dosage:', error);
-    return {
-      dosage: quantityTaken.toString(),
-      units: 'capsules'
-    };
-  }
-}
-
-/**
  * Main photo → event processing function
  * Orchestrates: photo upload → Gemini analysis → catalog lookup → event creation
  *
@@ -184,17 +133,22 @@ export async function processPhotoInput(photoPath, userId, apiKey, captureMethod
     let servingSize = null;
     let nutrients = null;
 
+    // Determine if we need nutrition label photo (for new products)
+    const requiresNutritionLabel = !catalogMatch &&
+      (event_type === 'supplement' || event_type === 'medication' || event_type === 'food');
+
     if (catalogMatch) {
       console.log('[photoEventParser] ✓ Found catalog match:', catalogMatch.product_name);
       productCatalogId = catalogMatch.id;
       servingSize = catalogMatch.serving_size;
-      nutrients = catalogMatch.nutrients;
+      nutrients = catalogMatch.micros; // Use micros field from catalog
 
       // Increment usage counter
       await incrementProductUsage(productCatalogId);
+    } else if (requiresNutritionLabel) {
+      console.log('[photoEventParser] No catalog match found. Will require nutrition label photo.');
     } else {
       console.log('[photoEventParser] No catalog match found. Will create event without catalog link.');
-      // Future: Trigger 2-photo flow to add to catalog
     }
 
     // Step 5: Create audit record
@@ -236,8 +190,29 @@ export async function processPhotoInput(photoPath, userId, apiKey, captureMethod
     const followUpQuestion = generateQuantityQuestion(name, form || 'capsules');
 
     // Step 8: Return incomplete event for confirmation screen
+    // If no catalog match, require nutrition label photo first
+    if (requiresNutritionLabel) {
+      return {
+        success: true,
+        requiresNutritionLabel: true,
+        parsed: {
+          event_type,
+          event_data: eventData,
+          confidence: analysis.confidence,
+          complete: false
+        },
+        auditId,
+        photoUrl, // Front photo URL - save for catalog entry
+        complete: false,
+        detectedItem,
+        catalogMatch: null
+      };
+    }
+
+    // Catalog match found - just need quantity
     return {
       success: true,
+      requiresNutritionLabel: false,
       parsed: {
         event_type,
         event_data: eventData,
@@ -250,7 +225,7 @@ export async function processPhotoInput(photoPath, userId, apiKey, captureMethod
       missingFields: ['quantity'],
       followUpQuestion,
       detectedItem,
-      catalogMatch: catalogMatch || null
+      catalogMatch
     };
 
   } catch (error) {
@@ -258,6 +233,131 @@ export async function processPhotoInput(photoPath, userId, apiKey, captureMethod
     return {
       success: false,
       error: error.message || 'Failed to process photo'
+    };
+  }
+}
+
+/**
+ * Process nutrition label photo and add product to catalog
+ *
+ * @param {string} labelPhotoUri - Local URI of nutrition label photo
+ * @param {Object} detectedItem - Item detected from front photo {name, brand, form, event_type}
+ * @param {string} frontPhotoUrl - URL of front photo (already uploaded)
+ * @param {string} auditId - Audit record ID from initial photo
+ * @param {string} userId - User ID
+ * @param {string} apiKey - Gemini API key
+ * @returns {Promise<{success: boolean, catalogProduct?: Object, error?: string, needsRetake?: boolean}>}
+ */
+export async function processNutritionLabelPhoto(
+  labelPhotoUri,
+  detectedItem,
+  frontPhotoUrl,
+  auditId,
+  userId,
+  apiKey
+) {
+  try {
+    console.log('[photoEventParser] Processing nutrition label photo...');
+
+    // Import nutrition label extractor
+    const { extractNutritionLabel } = require('./nutritionLabelExtractor');
+
+    // Step 1: Extract nutrition data from label
+    const extractionResult = await extractNutritionLabel(labelPhotoUri, apiKey);
+
+    if (!extractionResult.success) {
+      console.error('[photoEventParser] Failed to extract nutrition label:', extractionResult.error);
+      return {
+        success: false,
+        error: extractionResult.error,
+        needsRetake: extractionResult.needsRetake || false
+      };
+    }
+
+    console.log('[photoEventParser] ✓ Nutrition label extracted:', extractionResult.data);
+
+    // Step 2: Upload label photo to Supabase Storage
+    const { url: labelPhotoUrl, error: uploadError } = await uploadPhotoToSupabase(labelPhotoUri, userId);
+
+    if (uploadError) {
+      console.error('[photoEventParser] Failed to upload label photo:', uploadError);
+      return {
+        success: false,
+        error: `Failed to upload label photo: ${uploadError}`
+      };
+    }
+
+    // Step 3: Build product data for catalog
+    const productData = {
+      product_name: detectedItem.name,
+      brand: detectedItem.brand || null,
+      product_type: detectedItem.event_type, // 'supplement', 'medication', 'food'
+      serving_quantity: extractionResult.data.serving_quantity,
+      serving_unit: extractionResult.data.serving_unit,
+      serving_weight_grams: extractionResult.data.serving_weight_grams || null,
+      micros: extractionResult.data.micros || {},
+      active_ingredients: extractionResult.data.active_ingredients || [],
+      barcode: extractionResult.data.barcode || null,
+      photo_front_url: frontPhotoUrl,
+      photo_label_url: labelPhotoUrl
+    };
+
+    // Step 4: Return extracted data for user confirmation (don't insert yet)
+    return {
+      success: true,
+      extractedData: productData,
+      labelPhotoUrl
+    };
+
+  } catch (error) {
+    console.error('[photoEventParser] Error processing nutrition label:', error);
+    return {
+      success: false,
+      error: error.message || 'Failed to process nutrition label'
+    };
+  }
+}
+
+/**
+ * Confirm and add product to catalog after user review
+ *
+ * @param {Object} productData - Confirmed product data
+ * @param {string} auditId - Audit record ID
+ * @param {string} userId - User ID
+ * @returns {Promise<{success: boolean, catalogProduct?: Object, error?: string}>}
+ */
+export async function confirmAndAddToCatalog(productData, auditId, userId) {
+  try {
+    console.log('[photoEventParser] Adding product to catalog:', productData.product_name);
+
+    // Add to catalog
+    const result = await addProductToCatalog(productData, userId);
+
+    if (!result.success) {
+      return {
+        success: false,
+        error: result.error
+      };
+    }
+
+    console.log('[photoEventParser] ✓ Product added to catalog:', result.product.id);
+
+    // Update audit record with catalog link
+    await updateAuditStatus(auditId, 'catalog_product_created', {
+      product_catalog_id: result.product.id,
+      product_name: result.product.product_name
+    });
+
+    return {
+      success: true,
+      catalogProduct: result.product
+    };
+
+  } catch (error) {
+    console.error('[photoEventParser] Error adding to catalog:', error);
+    return {
+      success: false,
+      error: error.message || 'Failed to add product to catalog'
     };
   }
 }
@@ -312,44 +412,27 @@ export async function handleFollowUpResponse(auditId, quantityResponse, userId) 
       };
     }
 
-    // Calculate dosage based on quantity and catalog serving size
-    let dosage = null;
-    let units = null;
+    // Fetch catalog product if we have a match
+    let catalogProduct = null;
 
     if (catalogMatch && catalogMatch.product_id) {
-      // Fetch full catalog entry to get serving size and nutrients
-      const { data: catalogProduct } = await supabase
+      const { data } = await supabase
         .from('product_catalog')
         .select('*')
         .eq('id', catalogMatch.product_id)
         .single();
 
-      if (catalogProduct && catalogProduct.serving_size && catalogProduct.nutrients) {
-        const calculatedDosage = calculateDosageFromQuantity(
-          quantity,
-          catalogProduct.serving_size,
-          catalogProduct.nutrients
-        );
-        dosage = calculatedDosage.dosage;
-        units = calculatedDosage.units;
-      }
+      catalogProduct = data;
     }
 
-    // If no catalog match or calculation failed, use generic dosage
-    if (!dosage) {
-      dosage = quantity.toString();
-      units = detectedItem.form || 'capsules';
-    }
-
-    // Build complete event data
-    const eventData = {
-      name: detectedItem.name,
-      brand: detectedItem.brand || null,
-      dosage: dosage,
-      units: units,
-      quantity_taken: `${quantity} ${detectedItem.form || 'capsules'}`,
-      product_catalog_id: catalogMatch?.product_id || null
-    };
+    // Build event data using new format with calculated nutrients
+    const eventData = buildSupplementEventData(
+      catalogProduct,
+      quantity,
+      false, // not manual override
+      null,  // no user-edited nutrients
+      detectedItem // fallback detected info
+    );
 
     console.log('[photoEventParser] Complete event data:', eventData);
 

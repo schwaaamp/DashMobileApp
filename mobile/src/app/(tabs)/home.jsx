@@ -334,7 +334,7 @@ export default function HomeScreen() {
           throw new Error(result.error || 'Failed to process photo');
         }
 
-        // Navigate to confirmation screen with follow-up question
+        // Navigate to confirmation screen
         router.push({
           pathname: "/confirm",
           params: {
@@ -344,6 +344,7 @@ export default function HomeScreen() {
             missingFields: JSON.stringify(result.missingFields || []),
             confidence: result.parsed.confidence?.toString() || null,
             metadata: JSON.stringify({
+              requires_nutrition_label: result.requiresNutritionLabel || false,
               follow_up_question: result.followUpQuestion,
               follow_up_field: 'quantity',
               photo_url: result.photoUrl,

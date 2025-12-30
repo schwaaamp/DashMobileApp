@@ -21,6 +21,19 @@ jest.mock('expo-file-system/legacy', () => ({
   }
 }));
 
+// Mock productCatalog for tests that need catalog matches
+jest.mock('@/utils/productCatalog', () => ({
+  detectBarcode: jest.fn().mockResolvedValue({ success: false, barcode: null }),
+  lookupByBarcode: jest.fn().mockResolvedValue(null),
+  searchProductCatalog: jest.fn().mockResolvedValue([]),
+  incrementProductUsage: jest.fn().mockResolvedValue(null),
+  addProductToCatalog: jest.fn().mockResolvedValue({ success: true, product: {} }),
+  normalizeProductKey: jest.fn(text => text?.toLowerCase() || ''),
+  findCatalogMatch: jest.fn().mockResolvedValue(null)
+}));
+
+const { searchProductCatalog, detectBarcode } = require('@/utils/productCatalog');
+
 describe('Photo → Event Integration Tests', () => {
   const mockUserId = '12345678-1234-1234-1234-123456789012';
   const mockAuditId = 'audit-photo-123';
@@ -113,7 +126,19 @@ describe('Photo → Event Integration Tests', () => {
     expect(result.items[0].name).toContain('Magtein');
   });
 
-  it('should recognize missing quantity and return incomplete status', async () => {
+  it('should recognize missing quantity and return incomplete status (with catalog match)', async () => {
+    // Mock catalog match so we get the quantity flow, not nutrition label flow
+    searchProductCatalog.mockResolvedValueOnce([{
+      id: 'catalog-123',
+      product_name: 'Magtein Magnesium L-Threonate',
+      brand: 'NOW Foods',
+      product_type: 'supplement',
+      serving_quantity: 3,
+      serving_unit: 'capsule',
+      micros: { magnesium: { amount: 144, unit: 'mg' } },
+      search_rank: 0.9
+    }]);
+
     // Mock Gemini Vision API response for photo analysis
     global.fetch = jest.fn()
       // First call: Gemini Vision for product detection
@@ -171,7 +196,78 @@ describe('Photo → Event Integration Tests', () => {
     expect(result.parsed).toBeDefined();
   });
 
-  it('should generate follow-up question for missing quantity', async () => {
+  it('should return requiresNutritionLabel when no catalog match found', async () => {
+    // Mock Gemini Vision API response for photo analysis
+    global.fetch = jest.fn()
+      // First call: Gemini Vision for product detection
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          candidates: [{
+            content: {
+              parts: [{
+                text: JSON.stringify({
+                  items: [{
+                    name: 'Some New Supplement',
+                    brand: 'Unknown Brand',
+                    form: 'capsules',
+                    event_type: 'supplement'
+                  }],
+                  confidence: 90
+                })
+              }]
+            }
+          }]
+        })
+      })
+      // Second call: Barcode detection (returns no barcode)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          candidates: [{
+            content: {
+              parts: [{
+                text: JSON.stringify({
+                  success: false,
+                  barcode: null
+                })
+              }]
+            }
+          }]
+        })
+      });
+
+    const { processPhotoInput } = require('@/utils/photoEventParser');
+
+    const result = await processPhotoInput(
+      photoPath,
+      mockUserId,
+      'test-api-key',
+      'photo'
+    );
+
+    // Should require nutrition label for new product
+    expect(result.success).toBe(true);
+    expect(result.requiresNutritionLabel).toBe(true);
+    expect(result.complete).toBe(false);
+    expect(result.parsed).toBeDefined();
+  });
+
+  it('should generate follow-up question for missing quantity (with catalog match)', async () => {
+    // Mock catalog match so we get the quantity flow
+    searchProductCatalog.mockResolvedValueOnce([{
+      id: 'catalog-123',
+      product_name: 'Magtein Magnesium L-Threonate',
+      brand: 'NOW Foods',
+      product_type: 'supplement',
+      serving_quantity: 3,
+      serving_unit: 'capsule',
+      micros: { magnesium: { amount: 144, unit: 'mg' } },
+      search_rank: 0.9
+    }]);
+
     // Mock Gemini Vision API responses
     global.fetch = jest.fn()
       .mockResolvedValueOnce({
@@ -381,7 +477,19 @@ describe('Photo → Event Integration Tests', () => {
     expect(apiCall[0]).toContain('gemini');
   });
 
-  it('should handle processPhotoInput end-to-end flow', async () => {
+  it('should handle processPhotoInput end-to-end flow (with catalog match)', async () => {
+    // Mock catalog match so we get followUpQuestion
+    searchProductCatalog.mockResolvedValueOnce([{
+      id: 'catalog-123',
+      product_name: 'Magtein Magnesium L-Threonate',
+      brand: 'NOW Foods',
+      product_type: 'supplement',
+      serving_quantity: 3,
+      serving_unit: 'capsule',
+      micros: { magnesium: { amount: 144, unit: 'mg' } },
+      search_rank: 0.9
+    }]);
+
     // Mock Gemini Vision API responses
     global.fetch = jest.fn()
       .mockResolvedValueOnce({
@@ -431,7 +539,7 @@ describe('Photo → Event Integration Tests', () => {
       'photo'
     );
 
-    // Expected result structure
+    // Expected result structure when catalog match exists
     expect(result).toMatchObject({
       success: true,
       complete: false,
@@ -442,6 +550,70 @@ describe('Photo → Event Integration Tests', () => {
         complete: false
       })
     });
+  });
+
+  it('should handle processPhotoInput with nutrition label flow (no catalog match)', async () => {
+    // Mock Gemini Vision API responses
+    global.fetch = jest.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          candidates: [{
+            content: {
+              parts: [{
+                text: JSON.stringify({
+                  items: [{
+                    name: 'Some New Supplement',
+                    brand: 'New Brand',
+                    form: 'capsules',
+                    event_type: 'supplement'
+                  }],
+                  confidence: 90
+                })
+              }]
+            }
+          }]
+        })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          candidates: [{
+            content: {
+              parts: [{
+                text: JSON.stringify({
+                  success: false,
+                  barcode: null
+                })
+              }]
+            }
+          }]
+        })
+      });
+
+    const { processPhotoInput } = require('@/utils/photoEventParser');
+
+    const result = await processPhotoInput(
+      photoPath,
+      mockUserId,
+      'test-api-key',
+      'photo'
+    );
+
+    // Expected result structure when no catalog match (nutrition label required)
+    expect(result).toMatchObject({
+      success: true,
+      complete: false,
+      requiresNutritionLabel: true,
+      auditId: expect.any(String),
+      parsed: expect.objectContaining({
+        event_type: 'supplement',
+        complete: false
+      })
+    });
+    expect(result.followUpQuestion).toBeUndefined();
   });
 
   it('should convert image to base64 for Gemini API', async () => {

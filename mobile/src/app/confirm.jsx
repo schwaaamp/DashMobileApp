@@ -1,14 +1,16 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, Alert, TextInput } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, Alert, TextInput, ActivityIndicator } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useColors } from '@/components/useColors';
 import Header from '@/components/Header';
 import * as Haptics from 'expo-haptics';
+import * as ImagePicker from 'expo-image-picker';
 import { createVoiceEvent, updateAuditStatus } from '@/utils/voiceEventParser';
 import { calculateEventTime } from '@/utils/geminiParser';
 import useUser from '@/utils/auth/useUser';
 import { supabase } from '@/utils/supabaseClient';
+import { processNutritionLabelPhoto, confirmAndAddToCatalog, buildSupplementEventData } from '@/utils/photoEventParser';
 import {
   useFonts,
   Poppins_400Regular,
@@ -47,6 +49,24 @@ export default function ConfirmScreen() {
   const [followUpField, setFollowUpField] = useState(null);
   const [currentItemIndex, setCurrentItemIndex] = useState(0);
   const [detectedItems, setDetectedItems] = useState([]);
+
+  // Nutrition label capture flow state
+  const [requiresNutritionLabel, setRequiresNutritionLabel] = useState(false);
+  const [nutritionLabelStep, setNutritionLabelStep] = useState('capture'); // 'capture', 'processing', 'confirm', 'quantity'
+  const [extractedProductData, setExtractedProductData] = useState(null);
+  const [catalogProduct, setCatalogProduct] = useState(null);
+  const [isProcessingLabel, setIsProcessingLabel] = useState(false);
+  const [editableProductData, setEditableProductData] = useState(null);
+  const [quantityInput, setQuantityInput] = useState('');
+  const [labelPhotoUrl, setLabelPhotoUrl] = useState(null);
+
+  // Detect if we need nutrition label capture
+  useEffect(() => {
+    if (metadata?.requires_nutrition_label) {
+      setRequiresNutritionLabel(true);
+      setNutritionLabelStep('capture');
+    }
+  }, [metadata]);
 
   useEffect(() => {
     // Detect follow-up mode from route params (photo-based supplements)
@@ -183,6 +203,168 @@ export default function ConfirmScreen() {
     router.back();
   };
 
+  // Nutrition label capture handler
+  const handleCaptureNutritionLabel = async () => {
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ['images'],
+        quality: 0.8,
+        allowsEditing: false,
+      });
+
+      if (result.canceled) {
+        return;
+      }
+
+      const labelPhotoUri = result.assets[0].uri;
+      setNutritionLabelStep('processing');
+      setIsProcessingLabel(true);
+
+      // Process the nutrition label photo
+      const detectedItem = metadata?.detected_item;
+      const frontPhotoUrl = metadata?.photo_url;
+
+      const geminiApiKey = process.env.EXPO_PUBLIC_GEMINI_API_KEY;
+      if (!geminiApiKey) {
+        setIsProcessingLabel(false);
+        Alert.alert('Error', 'Gemini API key not configured.');
+        setNutritionLabelStep('capture');
+        return;
+      }
+
+      const processResult = await processNutritionLabelPhoto(
+        labelPhotoUri,
+        detectedItem,
+        frontPhotoUrl,
+        auditId,
+        user.id,
+        geminiApiKey
+      );
+
+      setIsProcessingLabel(false);
+
+      if (!processResult.success) {
+        if (processResult.needsRetake) {
+          Alert.alert(
+            'Could Not Read Label',
+            'We couldn\'t extract the nutrition information. Please take another photo with better lighting and ensure the label is clearly visible.',
+            [{ text: 'Try Again', onPress: () => setNutritionLabelStep('capture') }]
+          );
+          return;
+        }
+        Alert.alert('Error', processResult.error || 'Failed to process nutrition label.');
+        setNutritionLabelStep('capture');
+        return;
+      }
+
+      // Set extracted data for confirmation
+      setExtractedProductData(processResult.extractedData);
+      setLabelPhotoUrl(processResult.labelPhotoUrl);
+      setEditableProductData({
+        product_name: processResult.extractedData.product_name || detectedItem?.name || '',
+        brand: processResult.extractedData.brand || detectedItem?.brand || '',
+        serving_quantity: processResult.extractedData.serving_quantity?.toString() || '1',
+        serving_unit: processResult.extractedData.serving_unit || 'serving',
+        serving_weight_grams: processResult.extractedData.serving_weight_grams?.toString() || '',
+      });
+      setNutritionLabelStep('confirm');
+    } catch (error) {
+      console.error('Error capturing nutrition label:', error);
+      setIsProcessingLabel(false);
+      Alert.alert('Error', 'Failed to capture nutrition label. Please try again.');
+      setNutritionLabelStep('capture');
+    }
+  };
+
+  // Confirm extracted product data and add to catalog
+  const handleConfirmProductData = async () => {
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+
+      // Build product data with user edits
+      const productData = {
+        ...extractedProductData,
+        product_name: editableProductData.product_name,
+        brand: editableProductData.brand,
+        serving_quantity: parseFloat(editableProductData.serving_quantity) || 1,
+        serving_unit: editableProductData.serving_unit,
+        serving_weight_grams: editableProductData.serving_weight_grams
+          ? parseFloat(editableProductData.serving_weight_grams)
+          : null,
+        front_photo_url: metadata?.photo_url,
+        label_photo_url: labelPhotoUrl,
+      };
+
+      const result = await confirmAndAddToCatalog(productData, auditId, user.id);
+
+      if (!result.success) {
+        Alert.alert('Error', result.error || 'Failed to add product to catalog.');
+        return;
+      }
+
+      setCatalogProduct(result.catalogProduct);
+      setNutritionLabelStep('quantity');
+    } catch (error) {
+      console.error('Error confirming product data:', error);
+      Alert.alert('Error', 'Failed to save product. Please try again.');
+    }
+  };
+
+  // Handle quantity input and create final event
+  const handleQuantityConfirm = async () => {
+    try {
+      const quantity = parseFloat(quantityInput);
+      if (!quantity || quantity <= 0) {
+        Alert.alert('Invalid Quantity', 'Please enter a valid quantity.');
+        return;
+      }
+
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+
+      // Build event data with calculated nutrients
+      const eventData = buildSupplementEventData(
+        catalogProduct,
+        quantity,
+        false, // not manual override
+        null,  // no user-edited nutrients
+        metadata?.detected_item
+      );
+
+      // Create the voice event
+      const eventTime = new Date().toISOString();
+      await createVoiceEvent(
+        user.id,
+        parsedData?.event_type || 'supplement',
+        eventData,
+        eventTime,
+        auditId,
+        'photo'
+      );
+
+      await updateAuditStatus(auditId, 'awaiting_user_clarification_success');
+
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      Alert.alert('Success', 'Event saved successfully!', [
+        { text: 'OK', onPress: () => router.back() }
+      ]);
+    } catch (error) {
+      console.error('Error saving event with quantity:', error);
+      Alert.alert('Error', 'Failed to save event. Please try again.');
+    }
+  };
+
+  // Format micros for display
+  const formatMicros = (micros) => {
+    if (!micros || typeof micros !== 'object') return [];
+    return Object.entries(micros).map(([key, value]) => ({
+      name: key.charAt(0).toUpperCase() + key.slice(1).replace(/_/g, ' '),
+      amount: value.amount,
+      unit: value.unit
+    }));
+  };
+
   if (!fontsLoaded) {
     return null;
   }
@@ -210,6 +392,506 @@ export default function ConfirmScreen() {
           paddingBottom: insets.bottom + 24,
         }}
       >
+        {/* Nutrition Label Capture Flow */}
+        {requiresNutritionLabel && nutritionLabelStep === 'capture' && (
+          <View
+            style={{
+              backgroundColor: colors.cardBackground,
+              borderRadius: 16,
+              padding: 24,
+              borderWidth: 2,
+              borderColor: colors.primary,
+              marginBottom: 24,
+            }}
+          >
+            <Text
+              style={{
+                fontSize: 18,
+                fontFamily: 'Poppins_600SemiBold',
+                color: colors.text,
+                marginBottom: 8,
+                textAlign: 'center',
+              }}
+            >
+              New Product Detected
+            </Text>
+
+            {metadata?.detected_item && (
+              <Text
+                style={{
+                  fontSize: 16,
+                  fontFamily: 'Poppins_500Medium',
+                  color: colors.primary,
+                  marginBottom: 16,
+                  textAlign: 'center',
+                }}
+              >
+                {metadata.detected_item.brand} {metadata.detected_item.name}
+              </Text>
+            )}
+
+            <Text
+              style={{
+                fontSize: 14,
+                fontFamily: 'Poppins_400Regular',
+                color: colors.textSecondary,
+                marginBottom: 24,
+                textAlign: 'center',
+              }}
+            >
+              To save this product to your catalog, please take a photo of the nutrition label or supplement facts panel.
+            </Text>
+
+            <TouchableOpacity
+              onPress={handleCaptureNutritionLabel}
+              style={{
+                backgroundColor: colors.primary,
+                borderRadius: 16,
+                padding: 16,
+                alignItems: 'center',
+                flexDirection: 'row',
+                justifyContent: 'center',
+                gap: 8,
+              }}
+            >
+              <Text style={{ fontSize: 24 }}>📷</Text>
+              <Text
+                style={{
+                  fontSize: 16,
+                  fontFamily: 'Poppins_600SemiBold',
+                  color: colors.background,
+                }}
+              >
+                Take Photo of Label
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={handleCancel}
+              style={{
+                marginTop: 16,
+                padding: 12,
+                alignItems: 'center',
+              }}
+            >
+              <Text
+                style={{
+                  fontSize: 14,
+                  fontFamily: 'Poppins_500Medium',
+                  color: colors.textSecondary,
+                }}
+              >
+                Cancel
+              </Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* Processing State */}
+        {requiresNutritionLabel && nutritionLabelStep === 'processing' && (
+          <View
+            style={{
+              backgroundColor: colors.cardBackground,
+              borderRadius: 16,
+              padding: 48,
+              borderWidth: 1,
+              borderColor: colors.outline,
+              marginBottom: 24,
+              alignItems: 'center',
+            }}
+          >
+            <ActivityIndicator size="large" color={colors.primary} />
+            <Text
+              style={{
+                fontSize: 16,
+                fontFamily: 'Poppins_500Medium',
+                color: colors.text,
+                marginTop: 16,
+                textAlign: 'center',
+              }}
+            >
+              Analyzing nutrition label...
+            </Text>
+            <Text
+              style={{
+                fontSize: 14,
+                fontFamily: 'Poppins_400Regular',
+                color: colors.textSecondary,
+                marginTop: 8,
+                textAlign: 'center',
+              }}
+            >
+              Extracting serving size and nutrients
+            </Text>
+          </View>
+        )}
+
+        {/* Confirm Extracted Data */}
+        {requiresNutritionLabel && nutritionLabelStep === 'confirm' && editableProductData && (
+          <View
+            style={{
+              backgroundColor: colors.cardBackground,
+              borderRadius: 16,
+              padding: 20,
+              borderWidth: 1,
+              borderColor: colors.outline,
+              marginBottom: 24,
+            }}
+          >
+            <Text
+              style={{
+                fontSize: 18,
+                fontFamily: 'Poppins_600SemiBold',
+                color: colors.text,
+                marginBottom: 16,
+              }}
+            >
+              Confirm Product Details
+            </Text>
+
+            <Text
+              style={{
+                fontSize: 14,
+                fontFamily: 'Poppins_400Regular',
+                color: colors.textSecondary,
+                marginBottom: 16,
+              }}
+            >
+              Please verify and correct the extracted information.
+            </Text>
+
+            {/* Product Name */}
+            <Text style={{ fontSize: 13, fontFamily: 'Poppins_500Medium', color: colors.textSecondary, marginBottom: 4 }}>
+              Product Name
+            </Text>
+            <TextInput
+              style={{
+                backgroundColor: colors.background,
+                borderRadius: 12,
+                padding: 12,
+                fontSize: 15,
+                fontFamily: 'Poppins_400Regular',
+                color: colors.text,
+                borderWidth: 1,
+                borderColor: colors.outline,
+                marginBottom: 12,
+              }}
+              value={editableProductData.product_name}
+              onChangeText={(text) => setEditableProductData(prev => ({ ...prev, product_name: text }))}
+            />
+
+            {/* Brand */}
+            <Text style={{ fontSize: 13, fontFamily: 'Poppins_500Medium', color: colors.textSecondary, marginBottom: 4 }}>
+              Brand
+            </Text>
+            <TextInput
+              style={{
+                backgroundColor: colors.background,
+                borderRadius: 12,
+                padding: 12,
+                fontSize: 15,
+                fontFamily: 'Poppins_400Regular',
+                color: colors.text,
+                borderWidth: 1,
+                borderColor: colors.outline,
+                marginBottom: 12,
+              }}
+              value={editableProductData.brand}
+              onChangeText={(text) => setEditableProductData(prev => ({ ...prev, brand: text }))}
+            />
+
+            {/* Serving Size Row */}
+            <View style={{ flexDirection: 'row', gap: 12, marginBottom: 12 }}>
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontSize: 13, fontFamily: 'Poppins_500Medium', color: colors.textSecondary, marginBottom: 4 }}>
+                  Serving Size
+                </Text>
+                <TextInput
+                  style={{
+                    backgroundColor: colors.background,
+                    borderRadius: 12,
+                    padding: 12,
+                    fontSize: 15,
+                    fontFamily: 'Poppins_400Regular',
+                    color: colors.text,
+                    borderWidth: 1,
+                    borderColor: colors.outline,
+                  }}
+                  value={editableProductData.serving_quantity}
+                  onChangeText={(text) => setEditableProductData(prev => ({ ...prev, serving_quantity: text }))}
+                  keyboardType="numeric"
+                />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontSize: 13, fontFamily: 'Poppins_500Medium', color: colors.textSecondary, marginBottom: 4 }}>
+                  Unit
+                </Text>
+                <TextInput
+                  style={{
+                    backgroundColor: colors.background,
+                    borderRadius: 12,
+                    padding: 12,
+                    fontSize: 15,
+                    fontFamily: 'Poppins_400Regular',
+                    color: colors.text,
+                    borderWidth: 1,
+                    borderColor: colors.outline,
+                  }}
+                  value={editableProductData.serving_unit}
+                  onChangeText={(text) => setEditableProductData(prev => ({ ...prev, serving_unit: text }))}
+                />
+              </View>
+            </View>
+
+            {/* Serving Weight (optional) */}
+            <Text style={{ fontSize: 13, fontFamily: 'Poppins_500Medium', color: colors.textSecondary, marginBottom: 4 }}>
+              Serving Weight (grams, optional)
+            </Text>
+            <TextInput
+              style={{
+                backgroundColor: colors.background,
+                borderRadius: 12,
+                padding: 12,
+                fontSize: 15,
+                fontFamily: 'Poppins_400Regular',
+                color: colors.text,
+                borderWidth: 1,
+                borderColor: colors.outline,
+                marginBottom: 16,
+              }}
+              value={editableProductData.serving_weight_grams}
+              onChangeText={(text) => setEditableProductData(prev => ({ ...prev, serving_weight_grams: text }))}
+              keyboardType="numeric"
+              placeholder="e.g., 30"
+              placeholderTextColor={colors.textSecondary}
+            />
+
+            {/* Nutrients Display */}
+            {extractedProductData?.micros && Object.keys(extractedProductData.micros).length > 0 && (
+              <View style={{ marginBottom: 16 }}>
+                <Text style={{ fontSize: 13, fontFamily: 'Poppins_500Medium', color: colors.textSecondary, marginBottom: 8 }}>
+                  Nutrients (per serving)
+                </Text>
+                <View
+                  style={{
+                    backgroundColor: colors.background,
+                    borderRadius: 12,
+                    padding: 12,
+                    borderWidth: 1,
+                    borderColor: colors.outline,
+                  }}
+                >
+                  {formatMicros(extractedProductData.micros).map((nutrient, index) => (
+                    <View
+                      key={index}
+                      style={{
+                        flexDirection: 'row',
+                        justifyContent: 'space-between',
+                        paddingVertical: 4,
+                        borderBottomWidth: index < formatMicros(extractedProductData.micros).length - 1 ? 1 : 0,
+                        borderBottomColor: colors.outline,
+                      }}
+                    >
+                      <Text style={{ fontSize: 14, fontFamily: 'Poppins_400Regular', color: colors.text }}>
+                        {nutrient.name}
+                      </Text>
+                      <Text style={{ fontSize: 14, fontFamily: 'Poppins_500Medium', color: colors.primary }}>
+                        {nutrient.amount} {nutrient.unit}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+              </View>
+            )}
+
+            {/* Action Buttons */}
+            <View style={{ flexDirection: 'row', gap: 12 }}>
+              <TouchableOpacity
+                onPress={() => setNutritionLabelStep('capture')}
+                style={{
+                  flex: 1,
+                  backgroundColor: colors.background,
+                  borderRadius: 16,
+                  padding: 16,
+                  borderWidth: 1,
+                  borderColor: colors.outline,
+                  alignItems: 'center',
+                }}
+              >
+                <Text style={{ fontSize: 14, fontFamily: 'Poppins_600SemiBold', color: colors.text }}>
+                  Retake Photo
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                onPress={handleConfirmProductData}
+                style={{
+                  flex: 1,
+                  backgroundColor: colors.primary,
+                  borderRadius: 16,
+                  padding: 16,
+                  alignItems: 'center',
+                }}
+              >
+                <Text style={{ fontSize: 14, fontFamily: 'Poppins_600SemiBold', color: colors.background }}>
+                  Save to Catalog
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+
+        {/* Quantity Input after catalog save */}
+        {requiresNutritionLabel && nutritionLabelStep === 'quantity' && catalogProduct && (
+          <View
+            style={{
+              backgroundColor: colors.cardBackground,
+              borderRadius: 16,
+              padding: 24,
+              borderWidth: 2,
+              borderColor: colors.primary,
+              marginBottom: 24,
+            }}
+          >
+            <Text
+              style={{
+                fontSize: 18,
+                fontFamily: 'Poppins_600SemiBold',
+                color: colors.text,
+                marginBottom: 8,
+                textAlign: 'center',
+              }}
+            >
+              Product Saved! 🎉
+            </Text>
+
+            <Text
+              style={{
+                fontSize: 16,
+                fontFamily: 'Poppins_500Medium',
+                color: colors.primary,
+                marginBottom: 16,
+                textAlign: 'center',
+              }}
+            >
+              {catalogProduct.brand} {catalogProduct.product_name}
+            </Text>
+
+            <Text
+              style={{
+                fontSize: 14,
+                fontFamily: 'Poppins_400Regular',
+                color: colors.textSecondary,
+                marginBottom: 16,
+                textAlign: 'center',
+              }}
+            >
+              How many {catalogProduct.serving_unit}s did you take?
+            </Text>
+
+            {/* Quick selection buttons */}
+            <View style={{ flexDirection: 'row', gap: 8, marginBottom: 12 }}>
+              {[1, 2, 3].map((num) => (
+                <TouchableOpacity
+                  key={num}
+                  onPress={() => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    setQuantityInput(num.toString());
+                  }}
+                  style={{
+                    flex: 1,
+                    backgroundColor: quantityInput === num.toString() ? colors.primary : colors.background,
+                    borderRadius: 12,
+                    padding: 16,
+                    alignItems: 'center',
+                    borderWidth: 2,
+                    borderColor: quantityInput === num.toString() ? colors.primary : colors.outline,
+                  }}
+                >
+                  <Text
+                    style={{
+                      fontSize: 18,
+                      fontFamily: 'Poppins_600SemiBold',
+                      color: quantityInput === num.toString() ? colors.background : colors.text,
+                    }}
+                  >
+                    {num}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            {/* Text input for other amounts */}
+            <TextInput
+              style={{
+                backgroundColor: colors.background,
+                borderRadius: 12,
+                padding: 12,
+                fontSize: 15,
+                fontFamily: 'Poppins_400Regular',
+                color: colors.text,
+                borderWidth: 2,
+                borderColor: colors.outline,
+                marginBottom: 16,
+              }}
+              placeholder="Other amount..."
+              placeholderTextColor={colors.textSecondary}
+              value={quantityInput}
+              onChangeText={setQuantityInput}
+              keyboardType="numeric"
+            />
+
+            {/* Calculated nutrients preview */}
+            {quantityInput && parseFloat(quantityInput) > 0 && catalogProduct.micros && (
+              <View
+                style={{
+                  backgroundColor: colors.accentLilac,
+                  borderRadius: 12,
+                  padding: 12,
+                  marginBottom: 16,
+                }}
+              >
+                <Text style={{ fontSize: 13, fontFamily: 'Poppins_500Medium', color: colors.text, marginBottom: 8 }}>
+                  Estimated nutrients for {quantityInput} {catalogProduct.serving_unit}(s):
+                </Text>
+                {formatMicros(catalogProduct.micros).slice(0, 4).map((nutrient, index) => {
+                  const ratio = parseFloat(quantityInput) / (catalogProduct.serving_quantity || 1);
+                  const calculatedAmount = Math.round(nutrient.amount * ratio * 10) / 10;
+                  return (
+                    <Text key={index} style={{ fontSize: 12, fontFamily: 'Poppins_400Regular', color: colors.textSecondary }}>
+                      {nutrient.name}: {calculatedAmount} {nutrient.unit}
+                    </Text>
+                  );
+                })}
+              </View>
+            )}
+
+            <TouchableOpacity
+              onPress={handleQuantityConfirm}
+              disabled={!quantityInput || parseFloat(quantityInput) <= 0}
+              style={{
+                backgroundColor: quantityInput && parseFloat(quantityInput) > 0 ? colors.primary : colors.outline,
+                borderRadius: 16,
+                padding: 16,
+                alignItems: 'center',
+              }}
+            >
+              <Text
+                style={{
+                  fontSize: 16,
+                  fontFamily: 'Poppins_600SemiBold',
+                  color: quantityInput && parseFloat(quantityInput) > 0 ? colors.background : colors.textSecondary,
+                }}
+              >
+                Log Event
+              </Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* Original content - only show when not in nutrition label flow */}
+        {!requiresNutritionLabel && (
+          <>
         {/* Product Search Results Section */}
         {productOptions && Array.isArray(productOptions) && productOptions.length === 0 && (
           <View
@@ -612,6 +1294,8 @@ export default function ConfirmScreen() {
             </Text>
           </TouchableOpacity>
         </View>
+          </>
+        )}
       </ScrollView>
     </View>
   );
