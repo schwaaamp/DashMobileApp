@@ -257,7 +257,20 @@ export async function processNutritionLabelPhoto(
   apiKey
 ) {
   try {
-    console.log('[photoEventParser] Processing nutrition label photo...');
+    // Validate required parameters
+    if (!detectedItem) {
+      return {
+        success: false,
+        error: 'No detected item provided for nutrition label processing'
+      };
+    }
+
+    if (!detectedItem.name) {
+      return {
+        success: false,
+        error: 'Detected item is missing product name'
+      };
+    }
 
     // Import nutrition label extractor
     const { extractNutritionLabel } = require('./nutritionLabelExtractor');
@@ -266,7 +279,6 @@ export async function processNutritionLabelPhoto(
     const extractionResult = await extractNutritionLabel(labelPhotoUri, apiKey);
 
     if (!extractionResult.success) {
-      console.error('[photoEventParser] Failed to extract nutrition label:', extractionResult.error);
       return {
         success: false,
         error: extractionResult.error,
@@ -274,13 +286,10 @@ export async function processNutritionLabelPhoto(
       };
     }
 
-    console.log('[photoEventParser] ✓ Nutrition label extracted:', extractionResult.data);
-
     // Step 2: Upload label photo to Supabase Storage
     const { url: labelPhotoUrl, error: uploadError } = await uploadPhotoToSupabase(labelPhotoUri, userId);
 
     if (uploadError) {
-      console.error('[photoEventParser] Failed to upload label photo:', uploadError);
       return {
         success: false,
         error: `Failed to upload label photo: ${uploadError}`
@@ -310,7 +319,7 @@ export async function processNutritionLabelPhoto(
     };
 
   } catch (error) {
-    console.error('[photoEventParser] Error processing nutrition label:', error);
+    console.error('Error processing nutrition label:', error);
     return {
       success: false,
       error: error.message || 'Failed to process nutrition label'

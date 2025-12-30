@@ -138,7 +138,7 @@ Return ONLY valid JSON, no explanation.`;
     };
 
   } catch (error) {
-    console.error('[extractNutritionLabel] Error:', error);
+    console.error('Error extracting nutrition label:', error);
     return {
       success: false,
       error: error.message || 'Failed to extract nutrition label'

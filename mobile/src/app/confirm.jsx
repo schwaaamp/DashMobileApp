@@ -60,13 +60,13 @@ export default function ConfirmScreen() {
   const [quantityInput, setQuantityInput] = useState('');
   const [labelPhotoUrl, setLabelPhotoUrl] = useState(null);
 
-  // Detect if we need nutrition label capture
+  // Detect if we need nutrition label capture - only set initial state once
   useEffect(() => {
-    if (metadata?.requires_nutrition_label) {
+    if (metadata?.requires_nutrition_label && !requiresNutritionLabel) {
       setRequiresNutritionLabel(true);
       setNutritionLabelStep('capture');
     }
-  }, [metadata]);
+  }, [metadata, requiresNutritionLabel]);
 
   useEffect(() => {
     // Detect follow-up mode from route params (photo-based supplements)
