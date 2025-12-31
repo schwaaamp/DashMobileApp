@@ -4,6 +4,8 @@
 process.env.EXPO_PUBLIC_SUPABASE_URL = 'https://test.supabase.co';
 process.env.EXPO_PUBLIC_SUPABASE_KEY = 'test-supabase-key';
 process.env.EXPO_PUBLIC_GEMINI_API_KEY = 'test-gemini-key';
+process.env.EXPO_PUBLIC_GEMINI_TEXT_MODEL = 'gemini-2.5-flash';
+process.env.EXPO_PUBLIC_GEMINI_VISION_MODEL = 'gemini-2.0-flash-exp';
 
 // Mock Platform for all modules
 global.Platform = {

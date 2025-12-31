@@ -613,8 +613,9 @@ If any field is unclear or not visible, set to null.`;
       }
     };
 
+    const visionModel = process.env.EXPO_PUBLIC_GEMINI_VISION_MODEL || 'gemini-2.0-flash-exp';
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${geminiApiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/${visionModel}:generateContent?key=${geminiApiKey}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -701,8 +702,9 @@ If no barcode is visible, return {"barcode": null, "format": null, "confidence":
       }
     };
 
+    const visionModel = process.env.EXPO_PUBLIC_GEMINI_VISION_MODEL || 'gemini-2.0-flash-exp';
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${geminiApiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/${visionModel}:generateContent?key=${geminiApiKey}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

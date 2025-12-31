@@ -85,6 +85,8 @@ Required in `mobile/.env`:
 - `EXPO_PUBLIC_SUPABASE_URL` - Supabase project URL
 - `EXPO_PUBLIC_SUPABASE_KEY` - Supabase anon key
 - `EXPO_PUBLIC_GEMINI_API_KEY` - Google Gemini API key
+- `EXPO_PUBLIC_GEMINI_TEXT_MODEL` - Gemini model for text/voice parsing (e.g., `gemini-2.5-flash`)
+- `EXPO_PUBLIC_GEMINI_VISION_MODEL` - Gemini model for image analysis (e.g., `gemini-2.0-flash-exp`)
 
 **Path Aliases:**
 - `@/*` maps to `src/*` (configured in tsconfig.json)
@@ -195,3 +197,13 @@ When running tests before committing, ensure you're in the mobile directory or t
 - Use `@testing-library/react-native` for component testing
 - Keep tests close to source files in `__tests__/` directories
 - Run tests before committing (enforced by pre-commit hook)
+
+## Code Standards
+
+### AI/Gemini Model References
+- **Never hardcode Gemini model versions** (e.g., `gemini-2.5-flash`, `gemini-2.0-flash-exp`) directly in source code
+- Always use environment variables with fallback defaults:
+  - `EXPO_PUBLIC_GEMINI_TEXT_MODEL` - For text/voice parsing (non-vision tasks)
+  - `EXPO_PUBLIC_GEMINI_VISION_MODEL` - For image analysis (photos, nutrition labels, barcodes)
+- Pattern: `process.env.EXPO_PUBLIC_GEMINI_TEXT_MODEL || 'gemini-2.5-flash'`
+- This allows easy model upgrades without code changes across multiple files

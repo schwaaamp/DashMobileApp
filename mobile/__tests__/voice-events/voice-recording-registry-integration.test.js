@@ -135,7 +135,8 @@ describe('Voice Recording Registry Integration', () => {
       expect(registryMatch).toBeDefined();
 
       // Create audit record with correct model name
-      const geminiModel = registryMatch ? 'registry_bypass' : 'gemini-2.5-flash';
+      const textModel = process.env.EXPO_PUBLIC_GEMINI_TEXT_MODEL || 'gemini-2.5-flash';
+      const geminiModel = registryMatch ? 'registry_bypass' : textModel;
 
       const auditRecord = await createAuditRecord(
         mockUserId,
@@ -291,8 +292,9 @@ describe('Voice Recording Registry Integration', () => {
       const fuzzyMatch = await fuzzyMatchUserProducts(geminiParsed.transcription, mockUserId);
       expect(fuzzyMatch).toBeDefined();
 
+      const textModel = process.env.EXPO_PUBLIC_GEMINI_TEXT_MODEL || 'gemini-2.5-flash';
       const geminiModel = registryMatch ? 'registry_bypass'
-        : (fuzzyMatch ? 'registry_fuzzy_bypass' : 'gemini-2.5-flash');
+        : (fuzzyMatch ? 'registry_fuzzy_bypass' : textModel);
 
       expect(geminiModel).toBe('registry_fuzzy_bypass');
 
@@ -814,7 +816,7 @@ describe('Voice Recording Registry Integration', () => {
       expect(geminiParsed.confidence).toBe(75);
     });
 
-    it('should create audit record with gemini-2.5-flash model when no registry match', async () => {
+    it('should create audit record with text model when no registry match', async () => {
       supabase.from = createSupabaseMock({
         auditId: mockAuditId,
         registryEntries: []
@@ -835,10 +837,11 @@ describe('Voice Recording Registry Integration', () => {
       const registryMatch = await checkUserProductRegistry(geminiParsed.transcription, mockUserId);
       const fuzzyMatch = await fuzzyMatchUserProducts(geminiParsed.transcription, mockUserId);
 
+      const textModel = process.env.EXPO_PUBLIC_GEMINI_TEXT_MODEL || 'gemini-2.5-flash';
       const geminiModel = registryMatch ? 'registry_bypass'
-        : (fuzzyMatch ? 'registry_fuzzy_bypass' : 'gemini-2.5-flash');
+        : (fuzzyMatch ? 'registry_fuzzy_bypass' : textModel);
 
-      expect(geminiModel).toBe('gemini-2.5-flash');
+      expect(geminiModel).toBe(textModel);
 
       const auditRecord = await createAuditRecord(
         mockUserId,

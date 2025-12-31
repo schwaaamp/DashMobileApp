@@ -252,7 +252,8 @@ export async function analyzeSupplementPhoto(photoUri, userId, geminiApiKey) {
     };
 
     // Call Gemini API
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${geminiApiKey}`;
+    const visionModel = process.env.EXPO_PUBLIC_GEMINI_VISION_MODEL || 'gemini-2.0-flash-exp';
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${visionModel}:generateContent?key=${geminiApiKey}`;
 
     console.log('[analyzeSupplementPhoto] Calling Gemini Vision API...');
     const response = await fetch(url, {

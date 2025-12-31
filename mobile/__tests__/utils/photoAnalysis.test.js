@@ -302,7 +302,7 @@ describe('photoAnalysis', () => {
       expect(result.error).toContain('missing name or brand');
     });
 
-    test('should use correct Gemini model (gemini-2.0-flash-exp)', async () => {
+    test('should use correct Gemini vision model from env var', async () => {
       const mockBase64 = 'base64image';
       FileSystem.readAsStringAsync.mockResolvedValueOnce(mockBase64);
 
@@ -325,8 +325,9 @@ describe('photoAnalysis', () => {
 
       await analyzeSupplementPhoto('file://test.jpg', 'user123', 'test-api-key');
 
+      const visionModel = process.env.EXPO_PUBLIC_GEMINI_VISION_MODEL || 'gemini-2.0-flash-exp';
       expect(global.fetch).toHaveBeenCalledWith(
-        expect.stringContaining('gemini-2.0-flash-exp'),
+        expect.stringContaining(visionModel),
         expect.any(Object)
       );
     });

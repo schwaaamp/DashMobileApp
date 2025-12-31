@@ -232,13 +232,14 @@ describe('RLS Policy Tests - Database Operations', () => {
 
       supabase.from = mockFrom;
 
+      const textModel = process.env.EXPO_PUBLIC_GEMINI_TEXT_MODEL || 'gemini-2.5-flash';
       const result = await createAuditRecord(
         mockUserId,
         'took 500mg vitamin C',
         'supplement',
         500,
         'mg',
-        'gemini-2.5-flash',
+        textModel,
         { test: true }
       );
 
@@ -248,6 +249,7 @@ describe('RLS Policy Tests - Database Operations', () => {
     });
 
     it('should throw error with null user ID', async () => {
+      const textModel = process.env.EXPO_PUBLIC_GEMINI_TEXT_MODEL || 'gemini-2.5-flash';
       await expect(
         createAuditRecord(
           null,  // ❌ NULL user_id
@@ -255,13 +257,14 @@ describe('RLS Policy Tests - Database Operations', () => {
           'food',
           null,
           null,
-          'gemini-2.5-flash',
+          textModel,
           {}
         )
       ).rejects.toThrow('userId is required');
     });
 
     it('should throw error with undefined user ID', async () => {
+      const textModel = process.env.EXPO_PUBLIC_GEMINI_TEXT_MODEL || 'gemini-2.5-flash';
       await expect(
         createAuditRecord(
           undefined,  // ❌ UNDEFINED user_id (the actual bug!)
@@ -269,13 +272,14 @@ describe('RLS Policy Tests - Database Operations', () => {
           'food',
           null,
           null,
-          'gemini-2.5-flash',
+          textModel,
           {}
         )
       ).rejects.toThrow('userId is required');
     });
 
     it('should throw error with empty string user ID', async () => {
+      const textModel = process.env.EXPO_PUBLIC_GEMINI_TEXT_MODEL || 'gemini-2.5-flash';
       await expect(
         createAuditRecord(
           '',  // ❌ EMPTY user_id
@@ -283,13 +287,14 @@ describe('RLS Policy Tests - Database Operations', () => {
           'food',
           null,
           null,
-          'gemini-2.5-flash',
+          textModel,
           {}
         )
       ).rejects.toThrow('userId is required');
     });
 
     it('should throw error with invalid user ID format', async () => {
+      const textModel = process.env.EXPO_PUBLIC_GEMINI_TEXT_MODEL || 'gemini-2.5-flash';
       await expect(
         createAuditRecord(
           'not-a-valid-uuid',  // ❌ Invalid format
@@ -297,7 +302,7 @@ describe('RLS Policy Tests - Database Operations', () => {
           'food',
           null,
           null,
-          'gemini-2.5-flash',
+          textModel,
           {}
         )
       ).rejects.toThrow('userId has invalid UUID format');
@@ -320,6 +325,7 @@ describe('RLS Policy Tests - Database Operations', () => {
 
       supabase.from = mockFrom;
 
+      const textModel = process.env.EXPO_PUBLIC_GEMINI_TEXT_MODEL || 'gemini-2.5-flash';
       await expect(
         createAuditRecord(
           mockUserId,
@@ -327,7 +333,7 @@ describe('RLS Policy Tests - Database Operations', () => {
           'food',
           null,
           null,
-          'gemini-2.5-flash',
+          textModel,
           {}
         )
       ).rejects.toThrow('Failed to create audit record');
@@ -414,6 +420,7 @@ describe('RLS Policy Tests - Edge Cases', () => {
     it('should detect when user.id is passed as undefined to createAuditRecord', async () => {
       // This is the EXACT bug the user reported
       const undefinedUserId = undefined;
+      const textModel = process.env.EXPO_PUBLIC_GEMINI_TEXT_MODEL || 'gemini-2.5-flash';
 
       await expect(
         createAuditRecord(
@@ -422,7 +429,7 @@ describe('RLS Policy Tests - Edge Cases', () => {
           'supplement',
           null,
           null,
-          'gemini-2.5-flash',
+          textModel,
           { capture_method: 'voice' }
         )
       ).rejects.toThrow();
@@ -502,13 +509,14 @@ describe('Integration Test - Voice Input Flow', () => {
 
     supabase.from = mockFrom;
 
+    const textModel = process.env.EXPO_PUBLIC_GEMINI_TEXT_MODEL || 'gemini-2.5-flash';
     const auditRecord = await createAuditRecord(
       userId,  // ✅ Valid user ID
       'citrus element pack',
       'supplement',
       null,
       null,
-      'gemini-2.5-flash',
+      textModel,
       { capture_method: 'voice' }
     );
 

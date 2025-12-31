@@ -198,6 +198,7 @@ export async function processPhotoInput(photoPath, userId, apiKey, captureMethod
 
     // Step 4: Create audit record with all items
     const firstItem = analysis.items[0];
+    const visionModel = process.env.EXPO_PUBLIC_GEMINI_VISION_MODEL || 'gemini-2.0-flash-exp';
     console.log('[photoEventParser] Creating audit record...');
     const auditRecord = await createAuditRecord(
       userId,
@@ -205,7 +206,7 @@ export async function processPhotoInput(photoPath, userId, apiKey, captureMethod
       firstItem.event_type,
       null,
       null,
-      'gemini-2.0-flash-exp',
+      visionModel,
       {
         photo_url: photoUrl,
         detected_items: analysis.items,
@@ -223,7 +224,7 @@ export async function processPhotoInput(photoPath, userId, apiKey, captureMethod
         })),
         confidence: analysis.confidence,
         capture_method: captureMethod,
-        gemini_model: 'gemini-2.0-flash-exp'
+        gemini_model: visionModel
       }
     );
 

@@ -197,7 +197,8 @@ export default function HomeScreen() {
         const { value, units } = extractValueAndUnits(parsed.event_type, parsed.event_data);
 
         // Create audit record
-        const geminiModel = registryMatch ? 'registry_bypass' : (fuzzyMatch ? 'registry_fuzzy_bypass' : 'gemini-2.5-flash');
+        const textModel = process.env.EXPO_PUBLIC_GEMINI_TEXT_MODEL || 'gemini-2.5-flash';
+        const geminiModel = registryMatch ? 'registry_bypass' : (fuzzyMatch ? 'registry_fuzzy_bypass' : textModel);
         const matchInfo = registryMatch || fuzzyMatch;
         const auditRecord = await createAuditRecord(
           userId,
@@ -443,18 +444,18 @@ export default function HomeScreen() {
       const { value, units } = extractValueAndUnits(parsed.event_type, parsed.event_data);
 
       // Create audit record
-      const geminiModel = 'gemini-2.5-flash';
+      const textModel = process.env.EXPO_PUBLIC_GEMINI_TEXT_MODEL || 'gemini-2.5-flash';
       const auditRecord = await createAuditRecord(
         userId,
         textInput,
         parsed.event_type,
         value,
         units,
-        geminiModel,
+        textModel,
         {
           capture_method: 'manual',
           user_history_count: userHistory.length,
-          gemini_model: geminiModel,
+          gemini_model: textModel,
           confidence: parsed.confidence,
           parsed_at: new Date().toISOString()
         }

@@ -59,6 +59,9 @@ ios/build/
 *.tmp
 .cache/
 
+# Test coverage
+coverage/
+
 # Metro and build caches
 .metro-cache/
 caches/
