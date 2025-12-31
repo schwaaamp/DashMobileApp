@@ -3,6 +3,8 @@
  *
  * Tests for finding existing products in the catalog and
  * preventing duplicate entries when products already exist.
+ *
+ * Updated for new barcode architecture (product_barcodes table)
  */
 
 // Mock expo-file-system/legacy
@@ -11,34 +13,21 @@ jest.mock('expo-file-system/legacy', () => ({
   EncodingType: { Base64: 'base64' }
 }));
 
-// Create mock chain functions
-let mockSingleResult = { data: null, error: null };
-let mockLimitResult = { data: [], error: null };
-
-const mockSingle = jest.fn(() => Promise.resolve(mockSingleResult));
-const mockLimit = jest.fn(() => Promise.resolve(mockLimitResult));
-const mockOrder = jest.fn(() => ({ limit: mockLimit }));
-const mockOr = jest.fn(() => ({ order: mockOrder }));
-const mockEq = jest.fn(() => ({ single: mockSingle }));
-const mockSelect = jest.fn(() => ({ eq: mockEq, or: mockOr }));
-const mockFrom = jest.fn(() => ({ select: mockSelect }));
-
-// Mock Supabase
+// Mock Supabase - we'll override from() in each test
 jest.mock('../../src/utils/supabaseClient', () => ({
   supabase: {
-    from: (...args) => mockFrom(...args)
+    from: jest.fn(),
+    rpc: jest.fn(() => Promise.resolve({}))
   }
 }));
 
 // Import after mocks
 import { findCatalogMatch, normalizeProductKey } from '../../src/utils/productCatalog';
+import { supabase } from '../../src/utils/supabaseClient';
 
 describe('Catalog Matching', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    // Reset mock results
-    mockSingleResult = { data: null, error: null };
-    mockLimitResult = { data: [], error: null };
   });
 
   describe('normalizeProductKey', () => {
@@ -66,7 +55,6 @@ describe('Catalog Matching', () => {
     it('should return exact match when barcode is found', async () => {
       const mockProduct = {
         id: 'uuid-123',
-        barcode: '733739021427',
         product_name: 'Magtein Magnesium L-Threonate',
         brand: 'NOW Foods',
         product_type: 'supplement',
@@ -75,8 +63,38 @@ describe('Catalog Matching', () => {
         micros: { magnesium: { amount: 144, unit: 'mg' } }
       };
 
-      // Mock barcode lookup returning match
-      mockSingleResult = { data: mockProduct, error: null };
+      const mockBarcodeRecord = {
+        barcode: '733739021427',
+        total_quantity: 90,
+        total_unit: 'capsule',
+        container_type: 'bottle',
+        needs_reverification: false,
+        last_scanned_at: '2025-01-01T00:00:00Z',
+        product: mockProduct
+      };
+
+      // Mock product_barcodes returning match
+      supabase.from.mockImplementation((table) => {
+        if (table === 'product_barcodes') {
+          return {
+            select: jest.fn(() => ({
+              eq: jest.fn(() => ({
+                single: jest.fn(() => Promise.resolve({ data: mockBarcodeRecord, error: null }))
+              }))
+            })),
+            update: jest.fn(() => ({
+              eq: jest.fn(() => Promise.resolve({ error: null }))
+            }))
+          };
+        }
+        return {
+          select: jest.fn(() => ({
+            eq: jest.fn(() => ({
+              single: jest.fn(() => Promise.resolve({ data: null, error: { code: 'PGRST116' } }))
+            }))
+          }))
+        };
+      });
 
       const result = await findCatalogMatch({
         barcode: '733739021427',
@@ -99,8 +117,31 @@ describe('Catalog Matching', () => {
       };
 
       // Mock barcode lookup returning null, then text search returning match
-      mockSingleResult = { data: null, error: null };
-      mockLimitResult = { data: [mockProduct], error: null };
+      supabase.from.mockImplementation((table) => {
+        if (table === 'product_barcodes') {
+          return {
+            select: jest.fn(() => ({
+              eq: jest.fn(() => ({
+                single: jest.fn(() => Promise.resolve({ data: null, error: { code: 'PGRST116' } }))
+              }))
+            }))
+          };
+        } else if (table === 'product_catalog') {
+          return {
+            select: jest.fn(() => ({
+              eq: jest.fn(() => ({
+                single: jest.fn(() => Promise.resolve({ data: null, error: { code: 'PGRST116' } }))
+              })),
+              or: jest.fn(() => ({
+                order: jest.fn(() => ({
+                  limit: jest.fn(() => Promise.resolve({ data: [mockProduct], error: null }))
+                }))
+              }))
+            }))
+          };
+        }
+        return {};
+      });
 
       const result = await findCatalogMatch({
         barcode: null,
@@ -124,8 +165,31 @@ describe('Catalog Matching', () => {
       };
 
       // No barcode match, text search returns match
-      mockSingleResult = { data: null, error: null };
-      mockLimitResult = { data: [mockProduct], error: null };
+      supabase.from.mockImplementation((table) => {
+        if (table === 'product_barcodes') {
+          return {
+            select: jest.fn(() => ({
+              eq: jest.fn(() => ({
+                single: jest.fn(() => Promise.resolve({ data: null, error: { code: 'PGRST116' } }))
+              }))
+            }))
+          };
+        } else if (table === 'product_catalog') {
+          return {
+            select: jest.fn(() => ({
+              eq: jest.fn(() => ({
+                single: jest.fn(() => Promise.resolve({ data: null, error: { code: 'PGRST116' } }))
+              })),
+              or: jest.fn(() => ({
+                order: jest.fn(() => ({
+                  limit: jest.fn(() => Promise.resolve({ data: [mockProduct], error: null }))
+                }))
+              }))
+            }))
+          };
+        }
+        return {};
+      });
 
       const result = await findCatalogMatch({
         barcode: null,
@@ -139,8 +203,31 @@ describe('Catalog Matching', () => {
 
     it('should return null for unknown product (no catalog match)', async () => {
       // No barcode match, text search returns empty
-      mockSingleResult = { data: null, error: null };
-      mockLimitResult = { data: [], error: null };
+      supabase.from.mockImplementation((table) => {
+        if (table === 'product_barcodes') {
+          return {
+            select: jest.fn(() => ({
+              eq: jest.fn(() => ({
+                single: jest.fn(() => Promise.resolve({ data: null, error: { code: 'PGRST116' } }))
+              }))
+            }))
+          };
+        } else if (table === 'product_catalog') {
+          return {
+            select: jest.fn(() => ({
+              eq: jest.fn(() => ({
+                single: jest.fn(() => Promise.resolve({ data: null, error: { code: 'PGRST116' } }))
+              })),
+              or: jest.fn(() => ({
+                order: jest.fn(() => ({
+                  limit: jest.fn(() => Promise.resolve({ data: [], error: null }))
+                }))
+              }))
+            }))
+          };
+        }
+        return {};
+      });
 
       const result = await findCatalogMatch({
         barcode: null,
@@ -163,8 +250,31 @@ describe('Catalog Matching', () => {
       };
 
       // Simulate second photo - should find existing via text search
-      mockSingleResult = { data: null, error: null };
-      mockLimitResult = { data: [existingProduct], error: null };
+      supabase.from.mockImplementation((table) => {
+        if (table === 'product_barcodes') {
+          return {
+            select: jest.fn(() => ({
+              eq: jest.fn(() => ({
+                single: jest.fn(() => Promise.resolve({ data: null, error: { code: 'PGRST116' } }))
+              }))
+            }))
+          };
+        } else if (table === 'product_catalog') {
+          return {
+            select: jest.fn(() => ({
+              eq: jest.fn(() => ({
+                single: jest.fn(() => Promise.resolve({ data: null, error: { code: 'PGRST116' } }))
+              })),
+              or: jest.fn(() => ({
+                order: jest.fn(() => ({
+                  limit: jest.fn(() => Promise.resolve({ data: [existingProduct], error: null }))
+                }))
+              }))
+            }))
+          };
+        }
+        return {};
+      });
 
       const result = await findCatalogMatch({
         barcode: null,
@@ -185,8 +295,31 @@ describe('Catalog Matching', () => {
         product_type: 'supplement'
       };
 
-      mockSingleResult = { data: null, error: null };
-      mockLimitResult = { data: [existingProduct], error: null };
+      supabase.from.mockImplementation((table) => {
+        if (table === 'product_barcodes') {
+          return {
+            select: jest.fn(() => ({
+              eq: jest.fn(() => ({
+                single: jest.fn(() => Promise.resolve({ data: null, error: { code: 'PGRST116' } }))
+              }))
+            }))
+          };
+        } else if (table === 'product_catalog') {
+          return {
+            select: jest.fn(() => ({
+              eq: jest.fn(() => ({
+                single: jest.fn(() => Promise.resolve({ data: null, error: { code: 'PGRST116' } }))
+              })),
+              or: jest.fn(() => ({
+                order: jest.fn(() => ({
+                  limit: jest.fn(() => Promise.resolve({ data: [existingProduct], error: null }))
+                }))
+              }))
+            }))
+          };
+        }
+        return {};
+      });
 
       // User photo detected "NOW" (short form)
       const result = await findCatalogMatch({

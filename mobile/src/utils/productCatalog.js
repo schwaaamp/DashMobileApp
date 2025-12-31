@@ -33,10 +33,72 @@ export function normalizeProductKey(text) {
 }
 
 /**
+ * Validate barcode format and reject non-standard barcodes
+ * Rejects Amazon FNSKU, LPN, and other internal warehouse codes
+ *
+ * @param {string} barcode - Raw barcode string
+ * @returns {{ valid: boolean, normalized: string|null, format?: string, reason?: string, message?: string }}
+ */
+export function validateBarcode(barcode) {
+  if (!barcode || typeof barcode !== 'string') {
+    return { valid: false, normalized: null, reason: 'empty_or_invalid' };
+  }
+
+  const cleaned = barcode.trim().toUpperCase();
+
+  // Reject Amazon FNSKU codes (start with X00, typically 10 chars)
+  if (cleaned.startsWith('X00')) {
+    return {
+      valid: false,
+      normalized: null,
+      reason: 'amazon_fnsku',
+      message: 'Amazon FNSKU barcodes cannot be used. Please peel the Amazon label to reveal the manufacturer barcode, or use text search.'
+    };
+  }
+
+  // Reject Amazon LPN (warehouse tracking) codes
+  if (cleaned.startsWith('LPN')) {
+    return {
+      valid: false,
+      normalized: null,
+      reason: 'amazon_lpn',
+      message: 'Amazon warehouse codes cannot be used. Please use the manufacturer barcode or text search.'
+    };
+  }
+
+  // Validate standard barcode formats
+  const digitsOnly = cleaned.replace(/\D/g, '');
+
+  // UPC-A: 12 digits
+  if (digitsOnly.length === 12) {
+    return { valid: true, normalized: digitsOnly, format: 'UPC-A' };
+  }
+
+  // EAN-13: 13 digits
+  if (digitsOnly.length === 13) {
+    return { valid: true, normalized: digitsOnly, format: 'EAN-13' };
+  }
+
+  // UPC-E: 8 digits
+  if (digitsOnly.length === 8) {
+    return { valid: true, normalized: digitsOnly, format: 'UPC-E' };
+  }
+
+  // Unknown format
+  return {
+    valid: false,
+    normalized: null,
+    reason: 'unknown_format',
+    message: `Unrecognized barcode format (${digitsOnly.length} digits). Expected UPC-A (12), EAN-13 (13), or UPC-E (8).`
+  };
+}
+
+/**
  * Find a product in the catalog by barcode or name/brand
+ * Uses the new product_barcodes table for barcode lookup
  *
  * Priority:
- * 1. Exact barcode match (if barcode provided)
+ * 1. Exact barcode match (if barcode provided and valid)
  * 2. Text search on brand + product name
  *
  * @param {Object} params - Search parameters
@@ -49,17 +111,15 @@ export async function findCatalogMatch({ barcode, productName, brand }) {
   try {
     // Step 1: Try barcode match first (fastest, most accurate)
     if (barcode) {
-      const { data: barcodeMatch, error } = await supabase
-        .from('product_catalog')
-        .select('*')
-        .eq('barcode', barcode)
-        .single();
+      const barcodeResult = await lookupByBarcode(barcode);
 
-      if (barcodeMatch && !error) {
-        return {
-          ...barcodeMatch,
-          matchMethod: 'barcode'
-        };
+      // Check if barcode was rejected (e.g., Amazon FNSKU)
+      if (barcodeResult?.error) {
+        console.log(`[findCatalogMatch] Barcode rejected: ${barcodeResult.reason}`);
+        // Fall through to text search
+      } else if (barcodeResult) {
+        // Found a match via barcode
+        return barcodeResult;
       }
     }
 
@@ -107,6 +167,7 @@ export async function findCatalogMatch({ barcode, productName, brand }) {
 
 /**
  * Add a new product to the catalog
+ * Inserts product data into product_catalog and barcode into product_barcodes
  *
  * @param {Object} productData - Product data from nutrition label extraction
  * @param {string} userId - User who submitted the product
@@ -124,14 +185,27 @@ export async function addProductToCatalog(productData, userId) {
       micros,
       active_ingredients,
       barcode,
+      package_quantity,  // Total items in package (e.g., 90 capsules)
       photo_front_url,
       photo_label_url
     } = productData;
 
+    // Validate barcode if provided
+    let validatedBarcode = null;
+    if (barcode) {
+      const validation = validateBarcode(barcode);
+      if (validation.valid) {
+        validatedBarcode = validation.normalized;
+      } else {
+        console.log(`[addProductToCatalog] Skipping invalid barcode: ${validation.reason}`);
+      }
+    }
+
     // Generate product_key for duplicate detection
     const product_key = normalizeProductKey(`${brand || ''} ${product_name}`);
 
-    const { data, error } = await supabase
+    // Step 1: Insert product into product_catalog (without barcode)
+    const { data: product, error: productError } = await supabase
       .from('product_catalog')
       .insert({
         product_name,
@@ -143,7 +217,8 @@ export async function addProductToCatalog(productData, userId) {
         serving_weight_grams,
         micros: micros || {},
         active_ingredients: active_ingredients || [],
-        barcode,
+        // Note: barcode field kept for backwards compatibility during migration
+        barcode: validatedBarcode,
         photo_front_url,
         photo_label_url,
         submitted_by_user_id: userId,
@@ -153,21 +228,94 @@ export async function addProductToCatalog(productData, userId) {
       .select()
       .single();
 
-    if (error) {
-      console.error('[addProductToCatalog] Insert error:', error);
+    if (productError) {
+      console.error('[addProductToCatalog] Insert error:', productError);
       return {
         success: false,
-        error: error.message
+        error: productError.message
       };
+    }
+
+    // Step 2: Insert barcode into product_barcodes table (if valid)
+    if (validatedBarcode) {
+      const { error: barcodeError } = await supabase
+        .from('product_barcodes')
+        .insert({
+          barcode: validatedBarcode,
+          product_id: product.id,
+          total_quantity: package_quantity || null,
+          total_unit: serving_unit || null,
+          submitted_by_user_id: userId
+        });
+
+      if (barcodeError) {
+        // Log but don't fail - product was created successfully
+        console.error('[addProductToCatalog] Barcode insert error:', barcodeError);
+      }
     }
 
     return {
       success: true,
-      product: data
+      product
     };
 
   } catch (error) {
     console.error('[addProductToCatalog] Error:', error);
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+}
+
+/**
+ * Associate a new barcode with an existing product
+ * Use case: User scans 180ct bottle, product exists from 90ct bottle
+ *
+ * @param {string} barcode - UPC/EAN barcode
+ * @param {string} productId - Existing product catalog ID
+ * @param {Object} packagingInfo - Package details
+ * @param {number} packagingInfo.quantity - Total items in package (e.g., 180)
+ * @param {string} packagingInfo.unit - Unit type (e.g., "capsules")
+ * @param {string} packagingInfo.containerType - Container type (e.g., "bottle")
+ * @param {string} userId - User submitting the barcode
+ * @returns {Promise<{success: boolean, barcodeRecord?: Object, error?: string}>}
+ */
+export async function addBarcodeToProduct(barcode, productId, packagingInfo, userId) {
+  // Validate barcode format
+  const validation = validateBarcode(barcode);
+  if (!validation.valid) {
+    return {
+      success: false,
+      error: validation.message || `Invalid barcode: ${validation.reason}`
+    };
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('product_barcodes')
+      .insert({
+        barcode: validation.normalized,
+        product_id: productId,
+        total_quantity: packagingInfo?.quantity || null,
+        total_unit: packagingInfo?.unit || null,
+        container_type: packagingInfo?.containerType || null,
+        submitted_by_user_id: userId
+      })
+      .select()
+      .single();
+
+    if (error) {
+      if (error.code === '23505') {
+        // Duplicate barcode - already exists
+        return { success: false, error: 'Barcode already registered to another product' };
+      }
+      throw error;
+    }
+
+    return { success: true, barcodeRecord: data };
+  } catch (error) {
+    console.error('[addBarcodeToProduct] Error:', error);
     return {
       success: false,
       error: error.message
@@ -248,36 +396,102 @@ export async function searchProductCatalog(query, userId, limit = 10) {
 }
 
 /**
- * Lookup product by barcode
+ * Lookup product by barcode using the product_barcodes table
+ * Validates barcode format and rejects Amazon FNSKU/LPN codes
  *
  * @param {string} barcode - UPC/EAN code (e.g., "012345678901")
- * @returns {Promise<Object|null>} - Product data or null
+ * @returns {Promise<Object|null|{error: boolean, reason: string, message: string}>}
+ *   - Product data with packaging info, or
+ *   - null if not found, or
+ *   - Error object if barcode is invalid (e.g., Amazon FNSKU)
  */
 export async function lookupByBarcode(barcode) {
   if (!barcode) return null;
 
+  // Validate barcode format (reject Amazon FNSKU, etc.)
+  const validation = validateBarcode(barcode);
+  if (!validation.valid) {
+    console.log(`[lookupByBarcode] Rejected barcode: ${validation.reason}`);
+    return {
+      error: true,
+      reason: validation.reason,
+      message: validation.message
+    };
+  }
+
   try {
-    const { data, error } = await supabase
-      .from('product_catalog')
-      .select('*')
-      .eq('barcode', barcode)
+    // Use normalized barcode for lookup
+    const normalizedBarcode = validation.normalized;
+
+    // Step 1: Try new product_barcodes table first
+    const { data: barcodeRecord, error: barcodeError } = await supabase
+      .from('product_barcodes')
+      .select(`
+        barcode,
+        total_quantity,
+        total_unit,
+        container_type,
+        needs_reverification,
+        last_scanned_at,
+        product:product_catalog(*)
+      `)
+      .eq('barcode', normalizedBarcode)
       .single();
 
-    if (error) {
-      if (error.code === 'PGRST116') {
-        // Not found - expected case
-        return null;
-      }
-      console.error('Error looking up barcode:', error);
-      throw error;
+    if (barcodeRecord && !barcodeError) {
+      // Update last_scanned_at timestamp
+      await supabase
+        .from('product_barcodes')
+        .update({ last_scanned_at: new Date().toISOString() })
+        .eq('barcode', normalizedBarcode);
+
+      // Increment product usage
+      await incrementProductUsage(barcodeRecord.product.id);
+
+      // Return merged data with packaging info
+      return {
+        ...barcodeRecord.product,
+        barcode: barcodeRecord.barcode,
+        package_quantity: barcodeRecord.total_quantity,
+        package_unit: barcodeRecord.total_unit,
+        container_type: barcodeRecord.container_type,
+        needs_reverification: barcodeRecord.needs_reverification,
+        matchMethod: 'barcode'
+      };
     }
 
-    // Increment usage counter
-    if (data) {
-      await incrementProductUsage(data.id);
+    // Step 2: Fall back to legacy barcode column on product_catalog
+    // (for backwards compatibility during migration)
+    const { data: legacyMatch, error: legacyError } = await supabase
+      .from('product_catalog')
+      .select('*')
+      .eq('barcode', normalizedBarcode)
+      .single();
+
+    if (legacyMatch && !legacyError) {
+      // Increment usage counter
+      await incrementProductUsage(legacyMatch.id);
+
+      return {
+        ...legacyMatch,
+        matchMethod: 'barcode'
+      };
     }
 
-    return data;
+    // Not found in either table
+    if (barcodeError?.code === 'PGRST116' || legacyError?.code === 'PGRST116') {
+      return null;
+    }
+
+    // Unexpected error
+    if (barcodeError) {
+      console.error('Error looking up barcode in product_barcodes:', barcodeError);
+    }
+    if (legacyError) {
+      console.error('Error looking up barcode in product_catalog:', legacyError);
+    }
+
+    return null;
   } catch (error) {
     console.error('Exception in lookupByBarcode:', error);
     return null;
