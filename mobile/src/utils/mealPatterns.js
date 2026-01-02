@@ -46,7 +46,7 @@ export async function detectMealPatterns(userId, options = {}) {
 
   const { data: events, error } = await supabase
     .from('voice_events')
-    .select('id, event_type, event_data, event_time, product_catalog_id')
+    .select('event_id, event_type, event_data, event_time, product_catalog_id')
     .eq('user_id', userId)
     .gte('event_time', cutoffDate.toISOString())
     .in('event_type', ['food', 'supplement', 'medication'])

@@ -112,7 +112,7 @@ export default function ConfirmScreen() {
 
   useEffect(() => {
     // If a product is selected, update the event data with its nutritional info
-    if (selectedProduct && selectedProduct !== 'manual') {
+    if (selectedProduct !== null && selectedProduct !== 'manual' && productOptions?.[selectedProduct]) {
       const product = productOptions[selectedProduct];
       const updatedData = { ...parsedData.event_data };
 
@@ -128,11 +128,12 @@ export default function ConfirmScreen() {
       }
 
       setFinalEventData(updatedData);
-    } else {
+    } else if (selectedProduct === 'manual' || selectedProduct === null) {
       setFinalEventData(parsedData?.event_data || {});
     }
+    // Only depend on selectedProduct - productOptions is parsed from params and doesn't change
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedProduct, selectedProduct ? productOptions[selectedProduct] : null]);
+  }, [selectedProduct]);
 
   // Check for patterns after event save and show modal if found
   const checkAndShowPatterns = async () => {
