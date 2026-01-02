@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, Alert, TextInput, ActivityIndicator } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, Alert, TextInput, ActivityIndicator, Modal } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -12,6 +12,7 @@ import { calculateEventTime } from '@/utils/geminiParser';
 import useUser from '@/utils/auth/useUser';
 import { supabase } from '@/utils/supabaseClient';
 import { processNutritionLabelPhoto, confirmAndAddToCatalog, buildSupplementEventData } from '@/utils/photoEventParser';
+import { checkForNewPatterns, createTemplateFromPattern } from '@/utils/mealPatterns';
 import {
   useFonts,
   Poppins_400Regular,
@@ -71,6 +72,12 @@ export default function ConfirmScreen() {
   const [quantityInput, setQuantityInput] = useState('');
   const [labelPhotoUrl, setLabelPhotoUrl] = useState(null);
 
+  // Pattern detection modal state
+  const [showPatternModal, setShowPatternModal] = useState(false);
+  const [detectedPattern, setDetectedPattern] = useState(null);
+  const [templateNameInput, setTemplateNameInput] = useState('');
+  const [isSavingTemplate, setIsSavingTemplate] = useState(false);
+
   // Initialize multi-item mode from metadata - only run once on mount
   useEffect(() => {
     if (metadata?.is_multi_item && metadata?.detected_items) {
@@ -126,6 +133,67 @@ export default function ConfirmScreen() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedProduct, selectedProduct ? productOptions[selectedProduct] : null]);
+
+  // Check for patterns after event save and show modal if found
+  const checkAndShowPatterns = async () => {
+    try {
+      const patterns = await checkForNewPatterns(user.id, { minOccurrences: 2 });
+      if (patterns.length > 0) {
+        // Found a pattern that just reached threshold - show modal
+        const pattern = patterns[0];
+        setDetectedPattern(pattern);
+
+        // Suggest a default name based on time of day
+        const hour = pattern.typicalHour;
+        let suggestedName = '';
+        if (hour >= 5 && hour < 11) {
+          suggestedName = 'Morning Stack';
+        } else if (hour >= 11 && hour < 14) {
+          suggestedName = 'Lunch Stack';
+        } else if (hour >= 17 && hour < 21) {
+          suggestedName = 'Evening Stack';
+        } else {
+          suggestedName = 'My Stack';
+        }
+        setTemplateNameInput(suggestedName);
+        setShowPatternModal(true);
+        return true;
+      }
+    } catch (error) {
+      console.error('[checkAndShowPatterns] Error:', error);
+    }
+    return false;
+  };
+
+  // Handle saving a detected pattern as a template
+  const handleSaveTemplate = async () => {
+    if (!templateNameInput.trim() || !detectedPattern) return;
+
+    try {
+      setIsSavingTemplate(true);
+      await createTemplateFromPattern(user.id, detectedPattern, templateNameInput.trim());
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setShowPatternModal(false);
+      setDetectedPattern(null);
+      setTemplateNameInput('');
+      setIsSavingTemplate(false);
+
+      // Navigate back after small delay for UX
+      setTimeout(() => router.back(), 300);
+    } catch (error) {
+      console.error('[handleSaveTemplate] Error:', error);
+      setIsSavingTemplate(false);
+      Alert.alert('Error', 'Failed to save template. Please try again.');
+    }
+  };
+
+  // Dismiss pattern modal without saving
+  const handleDismissPattern = () => {
+    setShowPatternModal(false);
+    setDetectedPattern(null);
+    setTemplateNameInput('');
+    router.back();
+  };
 
   const handleConfirm = async () => {
     try {
@@ -215,9 +283,15 @@ export default function ConfirmScreen() {
       // Update audit status
       await updateAuditStatus(auditId, 'awaiting_user_clarification_success');
 
-      Alert.alert('Success', 'Event saved successfully!', [
-        { text: 'OK', onPress: () => router.back() }
-      ]);
+      // Check for patterns after successful save
+      const patternFound = await checkAndShowPatterns();
+
+      // Only show success and navigate if no pattern modal is being shown
+      if (!patternFound) {
+        Alert.alert('Success', 'Event saved successfully!', [
+          { text: 'OK', onPress: () => router.back() }
+        ]);
+      }
     } catch (error) {
       console.error('Error saving event:', error);
       Alert.alert('Error', 'Failed to save event. Please try again.');
@@ -382,13 +456,19 @@ export default function ConfirmScreen() {
           setMultiItemStep('new_item_label');
         }
       } else {
-        // All done
+        // All done - check for patterns
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        Alert.alert(
-          'Success',
-          `${savedCount} event${savedCount !== 1 ? 's' : ''} saved successfully!`,
-          [{ text: 'OK', onPress: () => router.back() }]
-        );
+
+        // Check for patterns after multi-item save
+        const patternFound = await checkAndShowPatterns();
+
+        if (!patternFound) {
+          Alert.alert(
+            'Success',
+            `${savedCount} event${savedCount !== 1 ? 's' : ''} saved successfully!`,
+            [{ text: 'OK', onPress: () => router.back() }]
+          );
+        }
       }
     } catch (error) {
       setIsProcessingMultiItem(false);
@@ -540,9 +620,15 @@ export default function ConfirmScreen() {
       await updateAuditStatus(auditId, 'awaiting_user_clarification_success');
 
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      Alert.alert('Success', 'Event saved successfully!', [
-        { text: 'OK', onPress: () => router.back() }
-      ]);
+
+      // Check for patterns after save
+      const patternFound = await checkAndShowPatterns();
+
+      if (!patternFound) {
+        Alert.alert('Success', 'Event saved successfully!', [
+          { text: 'OK', onPress: () => router.back() }
+        ]);
+      }
     } catch (error) {
       console.error('Error saving event with quantity:', error);
       Alert.alert('Error', 'Failed to save event. Please try again.');
@@ -711,12 +797,17 @@ export default function ConfirmScreen() {
         await updateAuditStatus(auditId, 'awaiting_user_clarification_success');
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
-        const totalItems = detectedItems.filter(i => i.selected).length;
-        Alert.alert(
-          'All Done!',
-          `${totalItems} supplement${totalItems !== 1 ? 's' : ''} logged successfully!`,
-          [{ text: 'OK', onPress: () => router.back() }]
-        );
+        // Check for patterns after all items are saved
+        const patternFound = await checkAndShowPatterns();
+
+        if (!patternFound) {
+          const totalItems = detectedItems.filter(i => i.selected).length;
+          Alert.alert(
+            'All Done!',
+            `${totalItems} supplement${totalItems !== 1 ? 's' : ''} logged successfully!`,
+            [{ text: 'OK', onPress: () => router.back() }]
+          );
+        }
       }
     } catch (error) {
       console.error('Error saving new item event:', error);
@@ -2361,6 +2452,184 @@ export default function ConfirmScreen() {
           </>
         )}
       </ScrollView>
+
+      {/* Pattern Detection Modal */}
+      <Modal
+        visible={showPatternModal}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={handleDismissPattern}
+      >
+        <View style={{
+          flex: 1,
+          backgroundColor: 'rgba(0,0,0,0.5)',
+          justifyContent: 'flex-end',
+        }}>
+          <View style={{
+            backgroundColor: colors.cardBackground,
+            borderTopLeftRadius: 24,
+            borderTopRightRadius: 24,
+            padding: 24,
+            paddingBottom: insets.bottom + 24,
+          }}>
+            {/* Header */}
+            <View style={{ alignItems: 'center', marginBottom: 20 }}>
+              <View style={{
+                width: 40,
+                height: 4,
+                backgroundColor: colors.outline,
+                borderRadius: 2,
+                marginBottom: 20,
+              }} />
+              <Text style={{
+                fontSize: 24,
+                marginBottom: 8,
+              }}>
+                🎯
+              </Text>
+              <Text style={{
+                fontSize: 20,
+                fontFamily: 'Poppins_600SemiBold',
+                color: colors.text,
+                textAlign: 'center',
+              }}>
+                Pattern Detected!
+              </Text>
+            </View>
+
+            {/* Pattern Info */}
+            {detectedPattern && (
+              <View style={{
+                backgroundColor: colors.background,
+                borderRadius: 16,
+                padding: 16,
+                marginBottom: 20,
+              }}>
+                <Text style={{
+                  fontSize: 14,
+                  fontFamily: 'Poppins_400Regular',
+                  color: colors.textSecondary,
+                  marginBottom: 12,
+                  textAlign: 'center',
+                }}>
+                  You've logged these {detectedPattern.items?.length || 0} items together {detectedPattern.occurrences} times. Save as a quick-log template?
+                </Text>
+
+                {/* Item List Preview */}
+                <View style={{ gap: 8 }}>
+                  {detectedPattern.items?.slice(0, 4).map((item, index) => (
+                    <View key={index} style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      gap: 8,
+                    }}>
+                      <View style={{
+                        width: 6,
+                        height: 6,
+                        borderRadius: 3,
+                        backgroundColor: colors.primary,
+                      }} />
+                      <Text style={{
+                        fontSize: 14,
+                        fontFamily: 'Poppins_500Medium',
+                        color: colors.text,
+                      }}>
+                        {item.name}
+                      </Text>
+                    </View>
+                  ))}
+                  {detectedPattern.items?.length > 4 && (
+                    <Text style={{
+                      fontSize: 13,
+                      fontFamily: 'Poppins_400Regular',
+                      color: colors.textSecondary,
+                      marginLeft: 14,
+                    }}>
+                      +{detectedPattern.items.length - 4} more
+                    </Text>
+                  )}
+                </View>
+              </View>
+            )}
+
+            {/* Template Name Input */}
+            <Text style={{
+              fontSize: 14,
+              fontFamily: 'Poppins_500Medium',
+              color: colors.textSecondary,
+              marginBottom: 8,
+            }}>
+              Template Name
+            </Text>
+            <TextInput
+              value={templateNameInput}
+              onChangeText={setTemplateNameInput}
+              placeholder="e.g., Morning Stack, Breakfast Vitamins"
+              placeholderTextColor={colors.textSecondary}
+              style={{
+                backgroundColor: colors.background,
+                borderRadius: 12,
+                padding: 16,
+                fontSize: 16,
+                fontFamily: 'Poppins_400Regular',
+                color: colors.text,
+                borderWidth: 2,
+                borderColor: colors.outline,
+                marginBottom: 20,
+              }}
+              autoFocus={true}
+            />
+
+            {/* Actions */}
+            <View style={{ gap: 12 }}>
+              <TouchableOpacity
+                onPress={handleSaveTemplate}
+                disabled={!templateNameInput.trim() || isSavingTemplate}
+                style={{
+                  backgroundColor: templateNameInput.trim() ? colors.primary : colors.outline,
+                  borderRadius: 16,
+                  padding: 16,
+                  alignItems: 'center',
+                  flexDirection: 'row',
+                  justifyContent: 'center',
+                  gap: 8,
+                }}
+              >
+                {isSavingTemplate ? (
+                  <ActivityIndicator color={colors.background} size="small" />
+                ) : (
+                  <>
+                    <Ionicons name="bookmark" size={20} color={templateNameInput.trim() ? colors.background : colors.textSecondary} />
+                    <Text style={{
+                      fontSize: 16,
+                      fontFamily: 'Poppins_600SemiBold',
+                      color: templateNameInput.trim() ? colors.background : colors.textSecondary,
+                    }}>
+                      Save Template
+                    </Text>
+                  </>
+                )}
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                onPress={handleDismissPattern}
+                style={{
+                  padding: 16,
+                  alignItems: 'center',
+                }}
+              >
+                <Text style={{
+                  fontSize: 14,
+                  fontFamily: 'Poppins_500Medium',
+                  color: colors.textSecondary,
+                }}>
+                  Not Now
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }

@@ -12,7 +12,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Mic, Camera, Send, Check } from "lucide-react-native";
 import * as Haptics from "expo-haptics";
 import * as ImagePicker from "expo-image-picker";
-import { useRouter } from "expo-router";
+import { useRouter, useFocusEffect } from "expo-router";
 import {
   useFonts,
   Poppins_400Regular,
@@ -21,6 +21,7 @@ import {
 } from "@expo-google-fonts/poppins";
 import { useColors } from "@/components/useColors.jsx";
 import Header from "@/components/Header.jsx";
+import TemplateSuggestionCard from "@/components/TemplateSuggestionCard.jsx";
 import useUpload from "@/utils/useUpload.js";
 import { useAuth } from "@/utils/auth/useAuth";
 import useUser from "@/utils/auth/useUser";
@@ -33,6 +34,7 @@ import {
   deleteAudioFile,
 } from "@/utils/voiceRecording";
 import { parseAudioWithGemini, parseTextWithGemini, calculateEventTime } from "@/utils/geminiParser";
+import { getSuggestedTemplate, matchTemplateByVoice } from "@/utils/mealPatterns";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 
 export default function HomeScreen() {
@@ -54,6 +56,48 @@ export default function HomeScreen() {
   const [isRecording, setIsRecording] = useState(false);
   const [showSuccessCheckmark, setShowSuccessCheckmark] = useState(false);
   const recordingRef = useRef(null);
+
+  // Template suggestion state
+  const [suggestedTemplate, setSuggestedTemplate] = useState(null);
+  const [templateDismissed, setTemplateDismissed] = useState(false);
+
+  // Fetch template suggestion when screen comes into focus
+  useFocusEffect(
+    useCallback(() => {
+      const fetchSuggestion = async () => {
+        if (!user?.id || templateDismissed) return;
+
+        try {
+          const template = await getSuggestedTemplate(user.id);
+          setSuggestedTemplate(template);
+        } catch (error) {
+          console.error('[Home] Error fetching template suggestion:', error);
+        }
+      };
+
+      fetchSuggestion();
+
+      // Reset dismissed state when leaving and returning
+      return () => {
+        // Keep dismissed state for this session
+      };
+    }, [user?.id, templateDismissed])
+  );
+
+  // Handle accepting a template suggestion
+  const handleTemplateAccept = useCallback((template) => {
+    setSuggestedTemplate(null);
+    router.push({
+      pathname: '/template-confirm',
+      params: { template: JSON.stringify(template) },
+    });
+  }, [router]);
+
+  // Handle dismissing a template suggestion
+  const handleTemplateDismiss = useCallback(() => {
+    setSuggestedTemplate(null);
+    setTemplateDismissed(true);
+  }, []);
 
   const samplePrompts = [
     "Log 6 units of basal insulin",
@@ -155,6 +199,21 @@ export default function HomeScreen() {
 
         // Clean up audio file
         await deleteAudioFile(audioUri);
+
+        // CHECK FOR TEMPLATE MATCH FIRST
+        // If user says "my morning vitamins" or similar, match to template
+        const templateMatch = await matchTemplateByVoice(parsed.transcription, userId);
+        if (templateMatch.matched && templateMatch.template) {
+          console.log(`Template matched: "${templateMatch.template.template_name}" (confidence: ${templateMatch.confidence})`);
+          setIsProcessing(false);
+
+          // Navigate to template confirmation screen
+          router.push({
+            pathname: '/template-confirm',
+            params: { template: JSON.stringify(templateMatch.template) },
+          });
+          return;
+        }
 
         // CRITICAL: Check user's product registry FIRST (Phase 2 - Self-Learning)
         // This must happen BEFORE we use Gemini's classification
@@ -430,6 +489,22 @@ export default function HomeScreen() {
       // Get userId reliably (no race condition with useUser hook)
       const userId = await requireUserId(user?.id);
 
+      // CHECK FOR TEMPLATE MATCH FIRST (before calling Gemini)
+      // If user types "my morning vitamins" or similar, match to template
+      const templateMatch = await matchTemplateByVoice(textInput, userId);
+      if (templateMatch.matched && templateMatch.template) {
+        console.log(`Template matched: "${templateMatch.template.template_name}" (confidence: ${templateMatch.confidence})`);
+        setIsProcessing(false);
+        setTextInput("");
+
+        // Navigate to template confirmation screen
+        router.push({
+          pathname: '/template-confirm',
+          params: { template: JSON.stringify(templateMatch.template) },
+        });
+        return;
+      }
+
       console.log('Fetching user history for context...');
       const userHistory = await getUserRecentEvents(userId, 50);
       console.log(`Found ${userHistory.length} recent events`);
@@ -644,6 +719,16 @@ export default function HomeScreen() {
         }}
         showsVerticalScrollIndicator={false}
       >
+        {/* Template Suggestion Card */}
+        {suggestedTemplate && (
+          <TemplateSuggestionCard
+            template={suggestedTemplate}
+            onAccept={handleTemplateAccept}
+            onDismiss={handleTemplateDismiss}
+            style={{ marginBottom: 20 }}
+          />
+        )}
+
         <View
           style={{
             backgroundColor: colors.cardBackground,
