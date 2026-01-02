@@ -15,6 +15,7 @@ import {
   HelpCircle,
   LogOut,
   ChevronRight,
+  Zap,
 } from "lucide-react-native";
 import * as Haptics from "expo-haptics";
 import { useColors } from "@/components/useColors.jsx";
@@ -44,6 +45,14 @@ export default function ProfileScreen() {
   });
 
   const settingsOptions = [
+    {
+      icon: Zap,
+      label: "My Templates",
+      onPress: () => {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        router.push("/templates");
+      },
+    },
     {
       icon: Settings,
       label: "Account Settings",

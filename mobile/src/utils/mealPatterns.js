@@ -505,6 +505,92 @@ export async function deleteTemplate(templateId, userId) {
 }
 
 /**
+ * Update an existing meal template
+ *
+ * @param {string} templateId
+ * @param {string} userId - For RLS verification
+ * @param {Object} updates - Fields to update
+ * @param {string} updates.template_name - New template name
+ * @param {string} updates.typical_time_range - New time range
+ * @param {Array} updates.items - Updated items array
+ * @returns {Promise<Object|null>} - Updated template or null on error
+ */
+export async function updateTemplate(templateId, userId, updates) {
+  if (!templateId || !userId) return null;
+
+  try {
+    const updateData = {};
+
+    if (updates.template_name) {
+      updateData.template_name = updates.template_name;
+      updateData.template_key = normalizeProductKey(updates.template_name);
+    }
+
+    if (updates.typical_time_range !== undefined) {
+      updateData.typical_time_range = updates.typical_time_range;
+    }
+
+    if (updates.items) {
+      updateData.items = updates.items;
+      // Regenerate fingerprint from items
+      updateData.fingerprint = updates.items
+        .map(item => item.product_id || normalizeProductKey(item.name))
+        .filter(Boolean)
+        .sort()
+        .join('|');
+    }
+
+    const { data, error } = await supabase
+      .from('user_meal_templates')
+      .update(updateData)
+      .eq('id', templateId)
+      .eq('user_id', userId)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('[updateTemplate] Error:', error);
+      return null;
+    }
+
+    return data;
+  } catch (error) {
+    console.error('[updateTemplate] Error:', error);
+    return null;
+  }
+}
+
+/**
+ * Get a single template by ID
+ *
+ * @param {string} templateId
+ * @param {string} userId - For RLS verification
+ * @returns {Promise<Object|null>} - Template or null
+ */
+export async function getTemplateById(templateId, userId) {
+  if (!templateId || !userId) return null;
+
+  try {
+    const { data, error } = await supabase
+      .from('user_meal_templates')
+      .select('*')
+      .eq('id', templateId)
+      .eq('user_id', userId)
+      .single();
+
+    if (error) {
+      console.error('[getTemplateById] Error:', error);
+      return null;
+    }
+
+    return data;
+  } catch (error) {
+    console.error('[getTemplateById] Error:', error);
+    return null;
+  }
+}
+
+/**
  * Get all templates for a user
  *
  * @param {string} userId
