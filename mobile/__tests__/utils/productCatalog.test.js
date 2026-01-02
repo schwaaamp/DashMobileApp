@@ -13,7 +13,8 @@ import {
   detectBarcode,
   validateBarcode,
   addBarcodeToProduct,
-  addProductToCatalog
+  addProductToCatalog,
+  checkBarcodeConflict
 } from '@/utils/productCatalog';
 import { supabase } from '@/utils/supabaseClient';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -1283,6 +1284,303 @@ describe('Product Catalog', () => {
       expect(result.success).toBe(true);
       expect(barcodeInsertCalled).toBe(false);
     });
+
+    it('should skip barcode insertion for empty string barcode', async () => {
+      const mockProduct = {
+        id: 'new-product-123',
+        product_name: 'Test Product',
+        brand: 'Test Brand',
+        product_type: 'food'
+      };
+
+      let barcodeInsertCalled = false;
+
+      supabase.from = jest.fn((table) => {
+        if (table === 'product_catalog') {
+          return {
+            insert: jest.fn(() => ({
+              select: jest.fn(() => ({
+                single: jest.fn(() => Promise.resolve({ data: mockProduct, error: null }))
+              }))
+            }))
+          };
+        } else if (table === 'product_barcodes') {
+          barcodeInsertCalled = true;
+          return {
+            insert: jest.fn(() => Promise.resolve({ error: null }))
+          };
+        }
+        return {};
+      });
+
+      const result = await addProductToCatalog({
+        product_name: 'Test Product',
+        brand: 'Test Brand',
+        product_type: 'food',
+        barcode: ''  // Empty string
+      }, mockUserId);
+
+      expect(result.success).toBe(true);
+      expect(barcodeInsertCalled).toBe(false);
+    });
+
+    it('should skip barcode insertion for Amazon LPN codes', async () => {
+      const mockProduct = {
+        id: 'new-product-123',
+        product_name: 'Test Product',
+        brand: 'Test Brand',
+        product_type: 'supplement'
+      };
+
+      let barcodeInsertCalled = false;
+
+      supabase.from = jest.fn((table) => {
+        if (table === 'product_catalog') {
+          return {
+            insert: jest.fn(() => ({
+              select: jest.fn(() => ({
+                single: jest.fn(() => Promise.resolve({ data: mockProduct, error: null }))
+              }))
+            }))
+          };
+        } else if (table === 'product_barcodes') {
+          barcodeInsertCalled = true;
+          return {
+            insert: jest.fn(() => Promise.resolve({ error: null }))
+          };
+        }
+        return {};
+      });
+
+      const result = await addProductToCatalog({
+        product_name: 'Test Product',
+        brand: 'Test Brand',
+        product_type: 'supplement',
+        barcode: 'LPN12345678'  // Amazon LPN code
+      }, mockUserId);
+
+      expect(result.success).toBe(true);
+      // Product should be created, but barcode insert should NOT be called
+      expect(barcodeInsertCalled).toBe(false);
+    });
+
+    it('should accept and normalize EAN-13 barcodes (13 digits)', async () => {
+      const mockProduct = {
+        id: 'new-product-123',
+        product_name: 'European Product',
+        brand: 'EU Brand',
+        product_type: 'food'
+      };
+
+      let capturedBarcodePayload = null;
+
+      supabase.from = jest.fn((table) => {
+        if (table === 'product_catalog') {
+          return {
+            insert: jest.fn(() => ({
+              select: jest.fn(() => ({
+                single: jest.fn(() => Promise.resolve({ data: mockProduct, error: null }))
+              }))
+            }))
+          };
+        } else if (table === 'product_barcodes') {
+          return {
+            insert: jest.fn((payload) => {
+              capturedBarcodePayload = payload;
+              return Promise.resolve({ error: null });
+            })
+          };
+        }
+        return {};
+      });
+
+      const result = await addProductToCatalog({
+        product_name: 'European Product',
+        brand: 'EU Brand',
+        product_type: 'food',
+        barcode: '5901234123457',  // EAN-13
+        package_quantity: 1
+      }, mockUserId);
+
+      expect(result.success).toBe(true);
+      expect(capturedBarcodePayload).not.toBeNull();
+      expect(capturedBarcodePayload.barcode).toBe('5901234123457');
+    });
+
+    it('should accept and normalize UPC-E barcodes (8 digits)', async () => {
+      const mockProduct = {
+        id: 'new-product-123',
+        product_name: 'Compact Product',
+        brand: 'Small Brand',
+        product_type: 'food'
+      };
+
+      let capturedBarcodePayload = null;
+
+      supabase.from = jest.fn((table) => {
+        if (table === 'product_catalog') {
+          return {
+            insert: jest.fn(() => ({
+              select: jest.fn(() => ({
+                single: jest.fn(() => Promise.resolve({ data: mockProduct, error: null }))
+              }))
+            }))
+          };
+        } else if (table === 'product_barcodes') {
+          return {
+            insert: jest.fn((payload) => {
+              capturedBarcodePayload = payload;
+              return Promise.resolve({ error: null });
+            })
+          };
+        }
+        return {};
+      });
+
+      const result = await addProductToCatalog({
+        product_name: 'Compact Product',
+        brand: 'Small Brand',
+        product_type: 'food',
+        barcode: '01234565',  // UPC-E (8 digits)
+        package_quantity: 1
+      }, mockUserId);
+
+      expect(result.success).toBe(true);
+      expect(capturedBarcodePayload).not.toBeNull();
+      expect(capturedBarcodePayload.barcode).toBe('01234565');
+    });
+
+    it('should normalize barcodes with spaces and dashes', async () => {
+      const mockProduct = {
+        id: 'new-product-123',
+        product_name: 'Test Product',
+        brand: 'Test Brand',
+        product_type: 'food'
+      };
+
+      let capturedBarcodePayload = null;
+
+      supabase.from = jest.fn((table) => {
+        if (table === 'product_catalog') {
+          return {
+            insert: jest.fn(() => ({
+              select: jest.fn(() => ({
+                single: jest.fn(() => Promise.resolve({ data: mockProduct, error: null }))
+              }))
+            }))
+          };
+        } else if (table === 'product_barcodes') {
+          return {
+            insert: jest.fn((payload) => {
+              capturedBarcodePayload = payload;
+              return Promise.resolve({ error: null });
+            })
+          };
+        }
+        return {};
+      });
+
+      const result = await addProductToCatalog({
+        product_name: 'Test Product',
+        brand: 'Test Brand',
+        product_type: 'food',
+        barcode: '012-345-678901',  // Barcode with dashes
+        package_quantity: 6
+      }, mockUserId);
+
+      expect(result.success).toBe(true);
+      expect(capturedBarcodePayload).not.toBeNull();
+      expect(capturedBarcodePayload.barcode).toBe('012345678901');  // Normalized
+    });
+
+    it('should send correct payload to product_barcodes table', async () => {
+      const mockProduct = {
+        id: 'new-product-123',
+        product_name: 'Magtein Magnesium L-Threonate',
+        brand: 'NOW Foods',
+        product_type: 'supplement'
+      };
+
+      let capturedBarcodePayload = null;
+
+      supabase.from = jest.fn((table) => {
+        if (table === 'product_catalog') {
+          return {
+            insert: jest.fn(() => ({
+              select: jest.fn(() => ({
+                single: jest.fn(() => Promise.resolve({ data: mockProduct, error: null }))
+              }))
+            }))
+          };
+        } else if (table === 'product_barcodes') {
+          return {
+            insert: jest.fn((payload) => {
+              capturedBarcodePayload = payload;
+              return Promise.resolve({ error: null });
+            })
+          };
+        }
+        return {};
+      });
+
+      await addProductToCatalog({
+        product_name: 'Magtein Magnesium L-Threonate',
+        brand: 'NOW Foods',
+        product_type: 'supplement',
+        serving_quantity: 3,
+        serving_unit: 'capsules',
+        barcode: '733739021427',
+        package_quantity: 90
+      }, mockUserId);
+
+      // Verify barcode payload structure
+      expect(capturedBarcodePayload).toEqual({
+        barcode: '733739021427',
+        product_id: 'new-product-123',
+        total_quantity: 90,
+        total_unit: 'capsules',
+        submitted_by_user_id: mockUserId
+      });
+    });
+
+    it('should reject unknown barcode format (wrong digit count)', async () => {
+      const mockProduct = {
+        id: 'new-product-123',
+        product_name: 'Test Product',
+        brand: 'Test Brand',
+        product_type: 'food'
+      };
+
+      let barcodeInsertCalled = false;
+
+      supabase.from = jest.fn((table) => {
+        if (table === 'product_catalog') {
+          return {
+            insert: jest.fn(() => ({
+              select: jest.fn(() => ({
+                single: jest.fn(() => Promise.resolve({ data: mockProduct, error: null }))
+              }))
+            }))
+          };
+        } else if (table === 'product_barcodes') {
+          barcodeInsertCalled = true;
+          return {
+            insert: jest.fn(() => Promise.resolve({ error: null }))
+          };
+        }
+        return {};
+      });
+
+      const result = await addProductToCatalog({
+        product_name: 'Test Product',
+        brand: 'Test Brand',
+        product_type: 'food',
+        barcode: '12345'  // Only 5 digits - invalid
+      }, mockUserId);
+
+      expect(result.success).toBe(true);  // Product still created
+      expect(barcodeInsertCalled).toBe(false);  // But barcode skipped
+    });
   });
 
   describe('Barcode Architecture - Multi-Size & Multipack Scenarios', () => {
@@ -1601,6 +1899,393 @@ describe('Product Catalog', () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toContain('already registered');
+    });
+  });
+
+  describe('checkBarcodeConflict', () => {
+    beforeEach(() => {
+      jest.clearAllMocks();
+    });
+
+    it('should return no conflict when barcode does not exist in database', async () => {
+      supabase.from = jest.fn(() => ({
+        select: jest.fn(() => ({
+          eq: jest.fn(() => ({
+            single: jest.fn(() => Promise.resolve({
+              data: null,
+              error: { code: 'PGRST116', message: 'No rows found' }
+            }))
+          }))
+        }))
+      }));
+
+      const result = await checkBarcodeConflict('012345678901', 'New Product', 'New Brand');
+
+      expect(result.conflict).toBe(false);
+    });
+
+    it('should return no conflict for null or empty barcode', async () => {
+      const resultNull = await checkBarcodeConflict(null, 'Product', 'Brand');
+      expect(resultNull.conflict).toBe(false);
+
+      const resultEmpty = await checkBarcodeConflict('', 'Product', 'Brand');
+      expect(resultEmpty.conflict).toBe(false);
+    });
+
+    it('should return no conflict for invalid barcode format', async () => {
+      // Amazon FNSKU - should be rejected before hitting database
+      const result = await checkBarcodeConflict('X00ABC1234', 'Product', 'Brand');
+      expect(result.conflict).toBe(false);
+    });
+
+    it('should return conflict when barcode is already flagged for reverification', async () => {
+      const mockExisting = {
+        last_scanned_at: '2025-01-01T00:00:00Z',
+        needs_reverification: true,
+        product: {
+          product_name: 'Old Product',
+          brand: 'Old Brand',
+          product_type: 'food'
+        }
+      };
+
+      supabase.from = jest.fn(() => ({
+        select: jest.fn(() => ({
+          eq: jest.fn(() => ({
+            single: jest.fn(() => Promise.resolve({ data: mockExisting, error: null }))
+          }))
+        }))
+      }));
+
+      const result = await checkBarcodeConflict('012345678901', 'New Product', 'New Brand');
+
+      expect(result.conflict).toBe(true);
+      expect(result.reason).toBe('previously_flagged');
+      expect(result.existingProduct.product_name).toBe('Old Product');
+    });
+
+    it('should return no conflict for fresh barcode with matching name', async () => {
+      // Last scanned 2 months ago - not stale
+      const twoMonthsAgo = new Date();
+      twoMonthsAgo.setMonth(twoMonthsAgo.getMonth() - 2);
+
+      const mockExisting = {
+        last_scanned_at: twoMonthsAgo.toISOString(),
+        needs_reverification: false,
+        product: {
+          product_name: 'Magtein Magnesium L-Threonate',
+          brand: 'NOW Foods',
+          product_type: 'supplement'
+        }
+      };
+
+      supabase.from = jest.fn(() => ({
+        select: jest.fn(() => ({
+          eq: jest.fn(() => ({
+            single: jest.fn(() => Promise.resolve({ data: mockExisting, error: null }))
+          }))
+        }))
+      }));
+
+      const result = await checkBarcodeConflict('733739021427', 'Magtein', 'NOW');
+
+      expect(result.conflict).toBe(false);
+    });
+
+    it('should detect stale food barcode with name mismatch (18 month threshold)', async () => {
+      // Last scanned 20 months ago - stale for food
+      const twentyMonthsAgo = new Date();
+      twentyMonthsAgo.setMonth(twentyMonthsAgo.getMonth() - 20);
+
+      const mockExisting = {
+        last_scanned_at: twentyMonthsAgo.toISOString(),
+        needs_reverification: false,
+        product: {
+          product_name: 'Old Granola Bar',
+          brand: 'Nature Valley',
+          product_type: 'food'  // 18 month threshold
+        }
+      };
+
+      const mockUpdate = jest.fn(() => ({
+        eq: jest.fn(() => Promise.resolve({ error: null }))
+      }));
+
+      supabase.from = jest.fn(() => ({
+        select: jest.fn(() => ({
+          eq: jest.fn(() => ({
+            single: jest.fn(() => Promise.resolve({ data: mockExisting, error: null }))
+          }))
+        })),
+        update: mockUpdate
+      }));
+
+      const result = await checkBarcodeConflict(
+        '016000264601',
+        'New Energy Bar',  // Completely different name
+        'Nature Valley'
+      );
+
+      expect(result.conflict).toBe(true);
+      expect(result.reason).toBe('stale_with_mismatch');
+      expect(result.suggestion).toContain('food product barcode may have been reassigned');
+      expect(result.existingProduct.product_name).toBe('Old Granola Bar');
+      expect(result.detectedProduct.name).toBe('New Energy Bar');
+
+      // Should have flagged for reverification
+      expect(mockUpdate).toHaveBeenCalled();
+    });
+
+    it('should use 36 month threshold for supplements (longer freshness)', async () => {
+      // Last scanned 30 months ago - stale for food but NOT for supplements
+      const thirtyMonthsAgo = new Date();
+      thirtyMonthsAgo.setMonth(thirtyMonthsAgo.getMonth() - 30);
+
+      const mockExisting = {
+        last_scanned_at: thirtyMonthsAgo.toISOString(),
+        needs_reverification: false,
+        product: {
+          product_name: 'Vitamin D3',
+          brand: 'NOW Foods',
+          product_type: 'supplement'  // 36 month threshold
+        }
+      };
+
+      supabase.from = jest.fn(() => ({
+        select: jest.fn(() => ({
+          eq: jest.fn(() => ({
+            single: jest.fn(() => Promise.resolve({ data: mockExisting, error: null }))
+          }))
+        }))
+      }));
+
+      // Same product, just 30 months old - should NOT conflict for supplements
+      const result = await checkBarcodeConflict('733739021427', 'Vitamin D3', 'NOW Foods');
+
+      expect(result.conflict).toBe(false);
+    });
+
+    it('should detect stale supplement barcode after 36 month threshold', async () => {
+      // Last scanned 40 months ago - stale for supplements
+      const fortyMonthsAgo = new Date();
+      fortyMonthsAgo.setMonth(fortyMonthsAgo.getMonth() - 40);
+
+      const mockExisting = {
+        last_scanned_at: fortyMonthsAgo.toISOString(),
+        needs_reverification: false,
+        product: {
+          product_name: 'Old Vitamin D',
+          brand: 'NOW Foods',
+          product_type: 'supplement'
+        }
+      };
+
+      const mockUpdate = jest.fn(() => ({
+        eq: jest.fn(() => Promise.resolve({ error: null }))
+      }));
+
+      supabase.from = jest.fn(() => ({
+        select: jest.fn(() => ({
+          eq: jest.fn(() => ({
+            single: jest.fn(() => Promise.resolve({ data: mockExisting, error: null }))
+          }))
+        })),
+        update: mockUpdate
+      }));
+
+      const result = await checkBarcodeConflict(
+        '733739021427',
+        'Magnesium Citrate',  // Different product
+        'NOW Foods'
+      );
+
+      expect(result.conflict).toBe(true);
+      expect(result.reason).toBe('stale_with_mismatch');
+      expect(result.suggestion).toContain('Product name mismatch detected');
+    });
+
+    it('should detect brand mismatch on stale barcode', async () => {
+      // Last scanned 24 months ago - stale for food
+      const twentyFourMonthsAgo = new Date();
+      twentyFourMonthsAgo.setMonth(twentyFourMonthsAgo.getMonth() - 24);
+
+      const mockExisting = {
+        last_scanned_at: twentyFourMonthsAgo.toISOString(),
+        needs_reverification: false,
+        product: {
+          product_name: 'Oats & Honey Bar',
+          brand: 'Nature Valley',
+          product_type: 'food'
+        }
+      };
+
+      const mockUpdate = jest.fn(() => ({
+        eq: jest.fn(() => Promise.resolve({ error: null }))
+      }));
+
+      supabase.from = jest.fn(() => ({
+        select: jest.fn(() => ({
+          eq: jest.fn(() => ({
+            single: jest.fn(() => Promise.resolve({ data: mockExisting, error: null }))
+          }))
+        })),
+        update: mockUpdate
+      }));
+
+      // Same-ish product name but DIFFERENT brand
+      const result = await checkBarcodeConflict(
+        '016000264601',
+        'Oats & Honey Bar',
+        'Quaker'  // Different brand!
+      );
+
+      expect(result.conflict).toBe(true);
+      expect(result.reason).toBe('stale_with_mismatch');
+    });
+
+    it('should NOT flag conflict when names are similar (substring match)', async () => {
+      // Last scanned 24 months ago - stale for food
+      const twentyFourMonthsAgo = new Date();
+      twentyFourMonthsAgo.setMonth(twentyFourMonthsAgo.getMonth() - 24);
+
+      const mockExisting = {
+        last_scanned_at: twentyFourMonthsAgo.toISOString(),
+        needs_reverification: false,
+        product: {
+          product_name: 'Magtein Magnesium L-Threonate',
+          brand: 'NOW Foods',
+          product_type: 'supplement'
+        }
+      };
+
+      supabase.from = jest.fn(() => ({
+        select: jest.fn(() => ({
+          eq: jest.fn(() => ({
+            single: jest.fn(() => Promise.resolve({ data: mockExisting, error: null }))
+          }))
+        }))
+      }));
+
+      // Short form "Magtein" should match "Magtein Magnesium L-Threonate"
+      const result = await checkBarcodeConflict('733739021427', 'Magtein', 'NOW');
+
+      expect(result.conflict).toBe(false);
+    });
+
+    it('should handle database errors gracefully (return no conflict)', async () => {
+      supabase.from = jest.fn(() => ({
+        select: jest.fn(() => ({
+          eq: jest.fn(() => ({
+            single: jest.fn(() => Promise.resolve({
+              data: null,
+              error: { code: 'UNKNOWN_ERROR', message: 'Database connection failed' }
+            }))
+          }))
+        }))
+      }));
+
+      const result = await checkBarcodeConflict('012345678901', 'Product', 'Brand');
+
+      // Should gracefully return no conflict on error
+      expect(result.conflict).toBe(false);
+    });
+
+    it('should flag needs_reverification in database when conflict detected', async () => {
+      // Last scanned 20 months ago - stale for food
+      const twentyMonthsAgo = new Date();
+      twentyMonthsAgo.setMonth(twentyMonthsAgo.getMonth() - 20);
+
+      const mockExisting = {
+        last_scanned_at: twentyMonthsAgo.toISOString(),
+        needs_reverification: false,
+        product: {
+          product_name: 'Old Product',
+          brand: 'Old Brand',
+          product_type: 'food'
+        }
+      };
+
+      let updateWasCalled = false;
+      let updatePayload = null;
+
+      const mockEq = jest.fn(() => Promise.resolve({ error: null }));
+      const mockUpdate = jest.fn((payload) => {
+        updateWasCalled = true;
+        updatePayload = payload;
+        return { eq: mockEq };
+      });
+
+      supabase.from = jest.fn(() => ({
+        select: jest.fn(() => ({
+          eq: jest.fn(() => ({
+            single: jest.fn(() => Promise.resolve({ data: mockExisting, error: null }))
+          }))
+        })),
+        update: mockUpdate
+      }));
+
+      await checkBarcodeConflict('012345678901', 'Completely Different Product', 'Different Brand');
+
+      expect(updateWasCalled).toBe(true);
+      expect(updatePayload).toEqual({ needs_reverification: true });
+      expect(mockEq).toHaveBeenCalledWith('barcode', '012345678901');
+    });
+
+    it('should handle null brand in existing product gracefully', async () => {
+      const twentyMonthsAgo = new Date();
+      twentyMonthsAgo.setMonth(twentyMonthsAgo.getMonth() - 20);
+
+      const mockExisting = {
+        last_scanned_at: twentyMonthsAgo.toISOString(),
+        needs_reverification: false,
+        product: {
+          product_name: 'Generic Apple',
+          brand: null,  // No brand
+          product_type: 'food'
+        }
+      };
+
+      supabase.from = jest.fn(() => ({
+        select: jest.fn(() => ({
+          eq: jest.fn(() => ({
+            single: jest.fn(() => Promise.resolve({ data: mockExisting, error: null }))
+          }))
+        }))
+      }));
+
+      // Different name but brand can't be compared
+      const result = await checkBarcodeConflict('012345678901', 'Apple', null);
+
+      // Should detect based on name similarity (Apple is substring of Generic Apple)
+      expect(result.conflict).toBe(false);
+    });
+
+    it('should handle null detected product name gracefully', async () => {
+      const twoMonthsAgo = new Date();
+      twoMonthsAgo.setMonth(twoMonthsAgo.getMonth() - 2);
+
+      const mockExisting = {
+        last_scanned_at: twoMonthsAgo.toISOString(),
+        needs_reverification: false,
+        product: {
+          product_name: 'Some Product',
+          brand: 'Some Brand',
+          product_type: 'food'
+        }
+      };
+
+      supabase.from = jest.fn(() => ({
+        select: jest.fn(() => ({
+          eq: jest.fn(() => ({
+            single: jest.fn(() => Promise.resolve({ data: mockExisting, error: null }))
+          }))
+        }))
+      }));
+
+      // Null detected name should not cause crash
+      const result = await checkBarcodeConflict('012345678901', null, null);
+
+      expect(result.conflict).toBe(false);
     });
   });
 });

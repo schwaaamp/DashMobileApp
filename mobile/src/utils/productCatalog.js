@@ -952,6 +952,104 @@ If no barcode is visible, return {"barcode": null, "format": null, "confidence":
 }
 
 /**
+ * Check if a barcode may have been recycled to a different product
+ * Uses product_type to determine staleness threshold:
+ * - Food: 18 months (higher recycling risk)
+ * - Supplement/Medication: 36 months (lower risk)
+ *
+ * @param {string} barcode - UPC/EAN barcode
+ * @param {string} detectedProductName - Product name from current scan/photo
+ * @param {string} detectedBrand - Brand name from current scan/photo
+ * @returns {Promise<{conflict: boolean, existingProduct?: Object, detectedProduct?: Object, reason?: string, suggestion?: string}>}
+ */
+export async function checkBarcodeConflict(barcode, detectedProductName, detectedBrand) {
+  if (!barcode) return { conflict: false };
+
+  // Validate and normalize barcode
+  const validation = validateBarcode(barcode);
+  if (!validation.valid) {
+    return { conflict: false };
+  }
+
+  try {
+    const { data: existing, error } = await supabase
+      .from('product_barcodes')
+      .select(`
+        last_scanned_at,
+        needs_reverification,
+        product:product_catalog(product_name, brand, product_type)
+      `)
+      .eq('barcode', validation.normalized)
+      .single();
+
+    // No existing barcode record - no conflict
+    if (!existing || error?.code === 'PGRST116') {
+      return { conflict: false };
+    }
+
+    if (error) {
+      console.error('[checkBarcodeConflict] Error:', error);
+      return { conflict: false };
+    }
+
+    // Already flagged for reverification
+    if (existing.needs_reverification) {
+      return {
+        conflict: true,
+        existingProduct: existing.product,
+        reason: 'previously_flagged'
+      };
+    }
+
+    // Determine staleness threshold based on product type
+    const stalenessMonths = existing.product.product_type === 'food' ? 18 : 36;
+    const stalenessThreshold = new Date();
+    stalenessThreshold.setMonth(stalenessThreshold.getMonth() - stalenessMonths);
+
+    const isStale = new Date(existing.last_scanned_at) < stalenessThreshold;
+
+    // Check if detected product name differs significantly
+    const existingName = (existing.product.product_name || '').toLowerCase();
+    const existingBrand = (existing.product.brand || '').toLowerCase();
+    const detectedNameLower = (detectedProductName || '').toLowerCase();
+    const detectedBrandLower = (detectedBrand || '').toLowerCase();
+
+    // Names differ if neither contains the other
+    const namesDiffer = detectedNameLower &&
+                        !existingName.includes(detectedNameLower) &&
+                        !detectedNameLower.includes(existingName);
+
+    // Brands differ if both exist and don't match
+    const brandsDiffer = existingBrand && detectedBrandLower &&
+                         existingBrand !== detectedBrandLower;
+
+    if (isStale && (namesDiffer || brandsDiffer)) {
+      // Flag for manual review
+      await supabase
+        .from('product_barcodes')
+        .update({ needs_reverification: true })
+        .eq('barcode', validation.normalized);
+
+      return {
+        conflict: true,
+        existingProduct: existing.product,
+        detectedProduct: { name: detectedProductName, brand: detectedBrand },
+        reason: 'stale_with_mismatch',
+        suggestion: existing.product.product_type === 'food'
+          ? 'This food product barcode may have been reassigned. Please verify.'
+          : 'Product name mismatch detected. Please verify this is the correct product.'
+      };
+    }
+
+    return { conflict: false };
+
+  } catch (error) {
+    console.error('[checkBarcodeConflict] Exception:', error);
+    return { conflict: false };
+  }
+}
+
+/**
  * Increment times_logged counter when product is used
  *
  * @param {string} productId - Product catalog ID
